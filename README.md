@@ -155,7 +155,35 @@ npm run build        # Compile TypeScript
 npm run metrics      # Run the CLI
 ```
 
-## Pushing git notes to a remote
+## Remote metrics via GitHub Actions
+
+By default, the GitHub API can't read git notes. To get full attribution data (including file-level breakdowns) when running against a remote repo, add the GitHub Actions workflow:
+
+### Setup
+
+1. Copy `.github/workflows/attribution-log.yml` to your repo
+2. Push your notes ref so the action can read it:
+   ```bash
+   git push origin refs/notes/ai-attribution
+   ```
+3. The workflow runs on every push to `main` and appends attribution data to `metrics/attribution-log.jsonl`
+
+### What the action does
+
+On each push to `main`:
+1. Fetches the `refs/notes/ai-attribution` ref
+2. Iterates new commits since the last logged entry
+3. Extracts trailers + notes for each commit
+4. Appends a JSON line per commit to `metrics/attribution-log.jsonl`
+5. Commits the updated file back to the repo
+
+### How the CLI uses it
+
+When you run `kiro-metrics --repo owner/repo`, the GitHub connector:
+1. Tries to read `metrics/attribution-log.jsonl` from the repo (one API call, full data)
+2. If the file doesn't exist, falls back to parsing commit messages via the commits API (trailers only, no file-level breakdown)
+
+### Pushing git notes
 
 Git notes live in a separate ref and aren't pushed by default:
 
@@ -163,7 +191,7 @@ Git notes live in a separate ref and aren't pushed by default:
 git push origin refs/notes/ai-attribution
 ```
 
-Or add to your push config:
+Or add to your push config so it happens automatically:
 ```bash
 git config --add remote.origin.push refs/notes/ai-attribution
 ```

@@ -13,7 +13,8 @@
 set -euo pipefail
 
 COMMIT_MSG_FILE="$1"
-ATTRIBUTION_SUMMARY=".kiro-attribution-staged.json"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+ATTRIBUTION_SUMMARY="${REPO_ROOT}/.kiro-attribution-staged.json"
 
 # If no attribution summary, nothing to add
 if [ ! -f "$ATTRIBUTION_SUMMARY" ]; then

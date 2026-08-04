@@ -11,8 +11,9 @@
 
 set -euo pipefail
 
-TRACKING_FILE=".kiro-attribution.json"
-ATTRIBUTION_SUMMARY=".kiro-attribution-staged.json"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+TRACKING_FILE="${REPO_ROOT}/.kiro-attribution.json"
+ATTRIBUTION_SUMMARY="${REPO_ROOT}/.kiro-attribution-staged.json"
 
 # If no summary exists, nothing to record
 if [ ! -f "$ATTRIBUTION_SUMMARY" ]; then
