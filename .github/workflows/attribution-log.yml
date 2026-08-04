@@ -100,10 +100,11 @@ jobs:
             echo "No new attribution entries to log"
           else
             ENTRIES=$(wc -l < metrics/attribution-log.jsonl | tr -d ' ')
-            git commit -m "chore(metrics): update attribution log (${ENTRIES} entries)
-
-ai-authorship: human-only
-ai-lines: 0
-human-lines: 0"
+            # Build the message with printf so the trailers end up at column 0 of the commit
+            # message. Writing them at column 0 directly in this YAML would terminate the
+            # `run: |` block scalar and turn them into top-level workflow keys, which makes
+            # GitHub reject the whole file (startup failure, no job created).
+            COMMIT_MSG=$(printf 'chore(metrics): update attribution log (%s entries)\n\nai-authorship: human-only\nai-lines: 0\nhuman-lines: 0\n' "$ENTRIES")
+            git commit -m "$COMMIT_MSG"
             git push
           fi

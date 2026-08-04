@@ -17,9 +17,13 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 TRACKING_FILE="${REPO_ROOT}/.kiro-attribution.json"
 ATTRIBUTION_SUMMARY="${REPO_ROOT}/.kiro-attribution-staged.json"
 
+# Drop any summary left behind by an aborted or amended commit. Every exit path below
+# either writes a fresh summary or intentionally leaves none, so a stale file can never
+# leak wrong counts into prepare-commit-msg.
+rm -f "$ATTRIBUTION_SUMMARY"
+
 # If no tracking file exists, nothing to attribute — allow commit
 if [ ! -f "$TRACKING_FILE" ]; then
-  echo '{"ai_lines":0,"human_lines":0,"total_lines":0,"ai_files":[],"human_files":[]}' > "$ATTRIBUTION_SUMMARY"
   exit 0
 fi
 
