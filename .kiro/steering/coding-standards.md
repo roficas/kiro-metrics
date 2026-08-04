@@ -4,8 +4,8 @@ inclusion: auto
 
 # Coding Standards
 
-Conventions for the Task API microservice. Keep things simple and idiomatic —
-the application is intentionally small so the metrics instrumentation is the star.
+Conventions for the kiro-metrics CLI pipeline. Keep things simple and idiomatic —
+the tool should be easy to read, extend, and contribute to as a public sample.
 
 ## Language & Runtime
 
@@ -18,17 +18,35 @@ the application is intentionally small so the metrics instrumentation is the sta
 ```
 kiro-metrics-demo/
   src/
-    index.ts          # Express app entry point
-    routes/           # Route handlers
-    models/           # Data models / types
-    services/         # Business logic
-  tests/              # Test files (*.test.ts)
+    index.ts              # CLI entrypoint (commander, orchestration)
+    connector/
+      types.ts            # CommitData interface
+      local-git.ts        # Reads from local git repo
+      github-api.ts       # Reads from GitHub REST API
+      index.ts            # Connector factory
+    consolidation/
+      types.ts            # MetricsResult interface
+      engine.ts           # Computes all metrics
+    report/
+      types.ts            # Report options
+      developer.ts        # Developer view
+      team.ts             # Team view
+      board.ts            # Board view
+      formatters/
+        terminal.ts       # Box-drawing terminal output
+        json.ts           # JSON output
+        markdown.ts       # Markdown output
+  tests/                  # Test files (*.test.ts)
+    connector/
+    consolidation/
+    report/
+    fixtures/             # Mock data for unit tests
   scripts/
-    metrics/          # Metrics computation scripts
-    hooks/            # Git hook scripts (called by Kiro hooks)
+    hooks/                # Git hook scripts (write side)
   .kiro/
-    steering/         # This folder
-    hooks/            # Kiro agent hooks
+    steering/             # This folder
+    hooks/                # Kiro agent hooks
+    specs/                # Kiro spec (metrics-pipeline)
 ```
 
 ## Style Rules
@@ -48,17 +66,17 @@ kiro-metrics-demo/
 
 ## Dependencies
 
-- Express for HTTP (lightweight, well-known)
-- zod for request validation
-- uuid for task IDs
-- No ORM — in-memory store is fine for this PoC
+- commander for CLI argument parsing
+- No HTTP framework — this is a CLI tool, not a server
+- child_process (Node built-in) for git commands
+- node native fetch (Node 20+) for GitHub API calls
 
 ## API Design
 
-- RESTful routes under `/api/tasks`
-- JSON request/response bodies
-- Standard HTTP status codes (200, 201, 400, 404, 409)
-- Validation errors return `{ error: string, details?: unknown }`
+- CLI-first: all output goes to stdout, errors to stderr
+- Use commander for arg parsing with clear --help output
+- Functions return typed data structures; formatters handle rendering
+- Connectors implement a common interface returning CommitData[]
 
 ## Documentation
 

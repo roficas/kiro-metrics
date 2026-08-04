@@ -18,14 +18,20 @@ measurement scripts we build here are exercised live as Kiro works through the s
 
 ## What we're building
 
-A "Task API" microservice (Node.js/TypeScript) — simple CRUD with status transitions.
-The application itself is intentionally small. The real deliverable is the metrics
-instrumentation layer around it:
+A metrics reader pipeline (Node.js/TypeScript CLI) that reads AI code attribution data
+from any git repository and produces four-tier metrics reports. The system has two sides:
 
-1. Git commit attribution (AI-generated vs AI-assisted vs human)
-2. Hooks that tag commits and enforce quality gates
-3. Scripts that compute the four-tier metrics (adoption, impact, CTS-SW, tension)
-4. Audience-aware reporting (developer view, team lead view, board view)
+**Write side** (already built):
+1. Kiro PostToolUse hook — logs every agent file-write
+2. Git hooks (pre-commit, prepare-commit-msg, post-commit) — compute and tag attribution
+
+**Read side** (the pipeline):
+1. Git connector — reads commits, trailers, and git notes (local or GitHub API)
+2. Consolidation engine — computes involvement rate, authorship rate, delivery frequency, CTS-SW
+3. Report generator — audience-aware views (developer, team, board)
+4. CLI entrypoint — `kiro-metrics --repo <path-or-owner/repo> --view team`
+
+No sample app. The hooks get added to any real project; this tool reads the results.
 
 ## Key concepts from the blog post this demonstrates
 
@@ -39,7 +45,8 @@ instrumentation layer around it:
 
 - Language: TypeScript (Node.js)
 - No Brazil — this is a public-facing sample, not internal tooling
-- Delivery unit: merged PR (monolithic app pattern)
+- CLI framework: commander
+- HTTP client: node-fetch (for GitHub API)
 - Test framework: vitest
 - Linter: eslint
 - Package manager: npm
@@ -49,3 +56,4 @@ instrumentation layer around it:
 - All commits from Kiro carry an `ai-authored-by: kiro` git trailer
 - Line-level attribution tracked via git notes
 - Every PR requires passing tests (tension guardrail)
+- The pipeline reads from any repo — you add the hooks to your project, then point kiro-metrics at it
