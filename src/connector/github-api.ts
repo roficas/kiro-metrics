@@ -160,8 +160,12 @@ export class GitHubApiSource implements CommitSource {
         trailers: {
           aiAuthoredBy: entry.trailers.ai_authored_by ?? undefined,
           aiAuthorship: validAuthorship(entry.trailers.ai_authorship),
-          aiLines: entry.trailers.ai_lines || undefined,
-          humanLines: entry.trailers.human_lines || undefined,
+          // Use ?? not ||. A human-only commit legitimately has ai_lines: 0, and || would
+          // coerce that 0 to undefined. The consolidation engine requires both aiLines and
+          // humanLines to be defined before counting a commit, so the whole commit's lines
+          // would be dropped from the authorship denominator — inflating the reported rate.
+          aiLines: entry.trailers.ai_lines ?? undefined,
+          humanLines: entry.trailers.human_lines ?? undefined,
         },
         notes: entry.notes ?? undefined,
       };
