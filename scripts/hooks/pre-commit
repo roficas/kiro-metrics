@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# pre-commit — Git hook that computes AI vs human attribution for staged files.
+#
+# Flow:
+#   1. Reads .kiro-attribution.json (populated by the Kiro PostToolUse hook)
+#   2. Cross-references staged files against the tracking log
+#   3. Counts lines added per file, splits into AI-authored vs human-authored
+#   4. Appends git trailers to the commit message (via prepare-commit-msg)
+#   5. Stores line-level attribution in git notes (via post-commit)
+#
+# Install: symlink or copy to .git/hooks/pre-commit
+#   ln -sf ../../scripts/hooks/pre-commit .git/hooks/pre-commit
+
+set -euo pipefail
+
+TRACKING_FILE=".kiro-attribution.json"
+ATTRIBUTION_SUMMARY=".kiro-attribution-staged.json"
+
+# If no tracking file exists, nothing to attribute — allow commit
+if [ ! -f "$TRACKING_FILE" ]; then
+  echo '{"ai_lines":0,"human_lines":0,"total_lines":0,"ai_files":[],"human_files":[]}' > "$ATTRIBUTION_SUMMARY"
+  exit 0
+fi
+
+# Get list of staged files (added/modified only, no deletes)
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=AM)
+
+if [ -z "$STAGED_FILES" ]; then
+  exit 0
+fi
+
+AI_LINES=0
+HUMAN_LINES=0
+AI_FILES=()
+HUMAN_FILES=()
+
+# For each staged file, check if it appears in the attribution tracking log
+while IFS= read -r file; do
+  # Count lines added in this file (staged diff)
+  LINES_ADDED=$(git diff --cached --numstat "$file" 2>/dev/null | awk '{print $1}' || echo "0")
+  if [ "$LINES_ADDED" = "-" ]; then
+    LINES_ADDED=0
+  fi
+
+  # Check if this file was edited by Kiro (appears in tracking file)
+  IS_AI_EDITED=$(jq -r --arg f "$file" '.edits | map(select(.file == $f)) | length' "$TRACKING_FILE" 2>/dev/null || echo "0")
+
+  if [ "$IS_AI_EDITED" -gt 0 ]; then
+    AI_LINES=$((AI_LINES + LINES_ADDED))
+    AI_FILES+=("$file")
+  else
+    HUMAN_LINES=$((HUMAN_LINES + LINES_ADDED))
+    HUMAN_FILES+=("$file")
+  fi
+done <<< "$STAGED_FILES"
+
+TOTAL_LINES=$((AI_LINES + HUMAN_LINES))
+
+# Write summary for prepare-commit-msg and post-commit to consume
+jq -n \
+  --argjson ai_lines "$AI_LINES" \
+  --argjson human_lines "$HUMAN_LINES" \
+  --argjson total_lines "$TOTAL_LINES" \
+  --argjson ai_files "$(printf '%s\n' "${AI_FILES[@]:-}" | jq -R . | jq -s .)" \
+  --argjson human_files "$(printf '%s\n' "${HUMAN_FILES[@]:-}" | jq -R . | jq -s .)" \
+  '{ai_lines: $ai_lines, human_lines: $human_lines, total_lines: $total_lines, ai_files: $ai_files, human_files: $human_files}' \
+  > "$ATTRIBUTION_SUMMARY"
+
+# Print summary to console
+if [ "$AI_LINES" -gt 0 ]; then
+  PERCENT=$(( (AI_LINES * 100) / (TOTAL_LINES > 0 ? TOTAL_LINES : 1) ))
+  echo "[attribution] AI-authored: ${AI_LINES}/${TOTAL_LINES} lines (${PERCENT}%) across ${#AI_FILES[@]} file(s)"
+fi
+
+exit 0

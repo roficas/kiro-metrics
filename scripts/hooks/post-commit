@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# post-commit — Stores line-level attribution as a git note and cleans up tracking files.
+#
+# Flow:
+#   1. Reads .kiro-attribution-staged.json (written by pre-commit)
+#   2. Attaches the attribution data as a git note on the new commit
+#   3. Clears .kiro-attribution.json and .kiro-attribution-staged.json
+#
+# Install: symlink or copy to .git/hooks/post-commit
+#   ln -sf ../../scripts/hooks/post-commit .git/hooks/post-commit
+
+set -euo pipefail
+
+TRACKING_FILE=".kiro-attribution.json"
+ATTRIBUTION_SUMMARY=".kiro-attribution-staged.json"
+
+# If no summary exists, nothing to record
+if [ ! -f "$ATTRIBUTION_SUMMARY" ]; then
+  exit 0
+fi
+
+AI_LINES=$(jq -r '.ai_lines' "$ATTRIBUTION_SUMMARY")
+TOTAL_LINES=$(jq -r '.total_lines' "$ATTRIBUTION_SUMMARY")
+
+# Only add a note if there was AI involvement
+if [ "$AI_LINES" -gt 0 ]; then
+  COMMIT_SHA=$(git rev-parse HEAD)
+  NOTE_CONTENT=$(jq -c '.' "$ATTRIBUTION_SUMMARY")
+
+  # Add git note with attribution data (namespace: ai-attribution)
+  git notes --ref=ai-attribution add -m "$NOTE_CONTENT" "$COMMIT_SHA" 2>/dev/null || \
+    git notes --ref=ai-attribution append -m "$NOTE_CONTENT" "$COMMIT_SHA" 2>/dev/null || true
+
+  echo "[attribution] Recorded AI attribution note on ${COMMIT_SHA:0:8}"
+fi
+
+# Clear tracking files for the next cycle
+echo '{"edits":[]}' > "$TRACKING_FILE"
+rm -f "$ATTRIBUTION_SUMMARY"
+
+exit 0

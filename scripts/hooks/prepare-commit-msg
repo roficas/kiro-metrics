@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# prepare-commit-msg — Appends AI attribution trailers to the commit message.
+#
+# Reads .kiro-attribution-staged.json (written by pre-commit) and adds:
+#   ai-authored-by: kiro
+#   ai-authorship: generated | assisted | human-only
+#   ai-lines: N
+#   human-lines: M
+#
+# Install: symlink or copy to .git/hooks/prepare-commit-msg
+#   ln -sf ../../scripts/hooks/prepare-commit-msg .git/hooks/prepare-commit-msg
+
+set -euo pipefail
+
+COMMIT_MSG_FILE="$1"
+ATTRIBUTION_SUMMARY=".kiro-attribution-staged.json"
+
+# If no attribution summary, nothing to add
+if [ ! -f "$ATTRIBUTION_SUMMARY" ]; then
+  exit 0
+fi
+
+AI_LINES=$(jq -r '.ai_lines' "$ATTRIBUTION_SUMMARY")
+HUMAN_LINES=$(jq -r '.human_lines' "$ATTRIBUTION_SUMMARY")
+TOTAL_LINES=$(jq -r '.total_lines' "$ATTRIBUTION_SUMMARY")
+
+# Skip if no lines at all
+if [ "$TOTAL_LINES" -eq 0 ]; then
+  exit 0
+fi
+
+# Determine authorship category
+if [ "$HUMAN_LINES" -eq 0 ] && [ "$AI_LINES" -gt 0 ]; then
+  CATEGORY="generated"
+elif [ "$AI_LINES" -gt 0 ] && [ "$HUMAN_LINES" -gt 0 ]; then
+  CATEGORY="assisted"
+else
+  CATEGORY="human-only"
+fi
+
+# Append trailers (git recognizes lines matching "key: value" at end of message)
+{
+  echo ""
+  echo ""
+  if [ "$CATEGORY" != "human-only" ]; then
+    echo "ai-authored-by: kiro"
+  fi
+  echo "ai-authorship: ${CATEGORY}"
+  echo "ai-lines: ${AI_LINES}"
+  echo "human-lines: ${HUMAN_LINES}"
+} >> "$COMMIT_MSG_FILE"
+
+exit 0
