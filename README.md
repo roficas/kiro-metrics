@@ -34,12 +34,26 @@ chmod +x your-project/scripts/hooks/*
 cd your-project
 ./scripts/hooks/install-hooks.sh
 
-# 4. Add tracking files to .gitignore
+# 4. Add tracking files to .gitignore — do this BEFORE your first commit
 echo ".kiro-attribution.json" >> .gitignore
 echo ".kiro-attribution-staged.json" >> .gitignore
 ```
 
 That's it. Start a new Kiro session and every commit will be automatically tagged.
+
+> **Never commit the tracking files.** Both are ephemeral scratch state:
+> `.kiro-attribution.json` is appended to by the Kiro hook and reset to `{"edits":[]}` by
+> `post-commit`; `.kiro-attribution-staged.json` is written by `pre-commit` and deleted by
+> `post-commit`. If you track them, every commit leaves your working tree dirty the instant
+> it finishes, and they conflict on every merge. Durable attribution lives in the commit
+> trailers and the `refs/notes/ai-attribution` ref, not in these files.
+>
+> Already committed them by mistake? Untrack them without deleting your local copies:
+> ```bash
+> git rm --cached .kiro-attribution.json .kiro-attribution-staged.json
+> printf '.kiro-attribution.json\n.kiro-attribution-staged.json\n' >> .gitignore
+> git commit -m "chore: untrack ephemeral attribution tracking files"
+> ```
 
 ### What gets added to your commits
 
@@ -145,6 +159,56 @@ Key points:
 - git
 - jq (for the hook scripts)
 - Kiro (for the PostToolUse hook to fire)
+
+## Troubleshooting
+
+### Trailers show `human-only` with `ai-lines: 0` and `human-lines: 0`
+
+Both counts being zero means `pre-commit` never found `.kiro-attribution.json` and fell through
+to its "no tracking file" path. Almost always a working-directory problem: the hooks resolve the
+tracking files from the repo root via `git rev-parse --show-toplevel`, so they work regardless of
+the CWD git invokes them from. If you copied older versions of the scripts that used bare relative
+paths (`TRACKING_FILE=".kiro-attribution.json"`), re-copy them from this repo.
+
+Check whether something is overriding the hooks path:
+
+```bash
+git config core.hooksPath
+```
+
+If that prints a path other than `.git/hooks`, a wrapper (corporate git tooling, Husky, pre-commit
+framework) owns your hooks. The symlinks in `.git/hooks/` are then ignored unless the wrapper
+explicitly chains to them. Verify your hooks actually run by adding a temporary `echo` to
+`pre-commit`, or run the chain manually:
+
+```bash
+bash scripts/hooks/pre-commit && cat .kiro-attribution-staged.json
+```
+
+### Trailers show `human-only` but you know Kiro edited the files
+
+`pre-commit` classifies a staged file as AI-authored only if its path appears in
+`.kiro-attribution.json`, and the match is an **exact string comparison** against the path git
+reports in `git diff --cached --name-only` (repo-root-relative). Compare the two:
+
+```bash
+git diff --cached --name-only --diff-filter=AM
+jq -r '.edits[].file' .kiro-attribution.json
+```
+
+Mismatches usually mean the Kiro hook logged a path relative to a subdirectory rather than the
+repo root. Also note `post-commit` resets the log after every commit, so files edited before your
+last commit won't be attributed in the next one.
+
+### `.kiro-attribution.json` stays empty during a Kiro session
+
+The `PostToolUse` hook isn't firing. Confirm `.kiro/hooks/track-ai-edits.json` exists, has
+`"enabled": true`, and that its `matcher` covers the write tools (`fs_write|str_replace|fs_append`).
+The hook only fires on agent edits — files you edit by hand are correctly counted as human lines.
+
+### Working tree goes dirty immediately after every commit
+
+You're tracking the ephemeral files. See the untracking steps in [Quick start](#make-your-project-trackable-write-side).
 
 ## Development
 
