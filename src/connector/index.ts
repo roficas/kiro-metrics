@@ -33,7 +33,7 @@ export function createConnector(repo: string): CommitSource {
   if (!existsSync(resolve(resolvedPath, ".git"))) {
     throw new Error(
       `Not a git repository: "${resolvedPath}"\n` +
-        "Pass a local path to a git repo or a GitHub owner/repo (e.g. aws-samples/kiro-metrics-demo)."
+        "Pass a local path to a git repo or a GitHub owner/repo (e.g. roficas/kiro-metrics)."
     );
   }
 
