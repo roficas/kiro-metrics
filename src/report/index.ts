@@ -22,6 +22,11 @@ import {
   formatTeamMarkdown,
   formatBoardMarkdown,
 } from "./formatters/markdown.js";
+import {
+  formatDeveloperHtml,
+  formatTeamHtml,
+  formatBoardHtml,
+} from "./formatters/html.js";
 
 /** Generate the full report string based on view and format options. */
 export function generateReport(
@@ -51,6 +56,8 @@ function formatDeveloper(
       return formatDeveloperJson(report);
     case "md":
       return formatDeveloperMarkdown(report);
+    case "html":
+      return formatDeveloperHtml(report);
   }
 }
 
@@ -64,6 +71,8 @@ function formatTeam(metrics: MetricsResult, options: ReportOptions): string {
       return formatTeamJson(report);
     case "md":
       return formatTeamMarkdown(report);
+    case "html":
+      return formatTeamHtml(report);
   }
 }
 
@@ -77,5 +86,7 @@ function formatBoard(metrics: MetricsResult, options: ReportOptions): string {
       return formatBoardJson(report);
     case "md":
       return formatBoardMarkdown(report);
+    case "html":
+      return formatBoardHtml(report);
   }
 }

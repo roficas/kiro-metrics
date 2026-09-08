@@ -2,7 +2,7 @@
 export type ReportView = "developer" | "team" | "board";
 
 /** Output format for the report. */
-export type ReportFormat = "terminal" | "json" | "md";
+export type ReportFormat = "terminal" | "json" | "md" | "html";
 
 /** Options for report generation. */
 export interface ReportOptions {

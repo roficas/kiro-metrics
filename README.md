@@ -107,6 +107,9 @@ npx tsx src/index.ts --repo /path/to/your-project --view developer --author "You
 npx tsx src/index.ts --repo /path/to/your-project --format json
 npx tsx src/index.ts --repo /path/to/your-project --format md
 
+# Self-contained HTML report (inlined CSS, no external requests) (untested)
+npx tsx src/index.ts --repo /path/to/your-project --format html > attribution-report.html
+
 # GitHub remote (requires GITHUB_TOKEN)
 export GITHUB_TOKEN=ghp_...
 npx tsx src/index.ts --repo owner/repo
@@ -121,7 +124,7 @@ npx tsx src/index.ts --repo owner/repo
 | `--until <date>` | End of range | `now` |
 | `--author <name>` | Filter to one contributor | all |
 | `--view <view>` | `developer`, `team`, or `board` | `team` |
-| `--format <format>` | `terminal`, `json`, or `md` | `terminal` |
+| `--format <format>` | `terminal`, `json`, `md`, or `html` | `terminal` |
 | `--hourly-rate <rate>` | Hourly rate for CTS-SW calculation | — |
 | `--hours-per-commit <hours>` | Hours per delivery unit | `2` |
 

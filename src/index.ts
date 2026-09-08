@@ -31,7 +31,11 @@ program
     "Report audience: developer, team, board",
     "team"
   )
-  .option("--format <format>", "Output format: terminal, json, md", "terminal")
+  .option(
+    "--format <format>",
+    "Output format: terminal, json, md, html",
+    "terminal"
+  )
   .option(
     "--hourly-rate <rate>",
     "Developer hourly rate for CTS-SW calculation",
@@ -136,7 +140,7 @@ function validateView(input: string): ReportView {
 }
 
 function validateFormat(input: string): ReportFormat {
-  const valid: ReportFormat[] = ["terminal", "json", "md"];
+  const valid: ReportFormat[] = ["terminal", "json", "md", "html"];
   if (!valid.includes(input as ReportFormat)) {
     throw new Error(
       `Invalid format "${input}". Valid options: ${valid.join(", ")}`
