@@ -20,13 +20,28 @@ TRACKING_PATH="${PROJECT_ROOT}/${TRACKING_FILE}"
 # Read stdin (Kiro passes session context as JSON)
 INPUT=$(cat)
 
-# Extract relevant fields from the hook context
-TOOL_NAME=$(echo "$INPUT" | jq -r '.toolName // "unknown"' 2>/dev/null || echo "unknown")
-FILE_PATH=$(echo "$INPUT" | jq -r '.toolInput.path // .toolInput.targetFile // "unknown"' 2>/dev/null || echo "unknown")
+# Extract relevant fields from the hook context.
+#
+# Payload key casing differs by client, so accept both. The Kiro IDE sends snake_case:
+#   {"hook_event_name":"PostToolUse","tool_name":"str_replace","tool_input":{"path":"..."}}
+# Earlier versions of this script read only camelCase (.toolName/.toolInput). Against the
+# IDE both resolved to null, FILE_PATH became "unknown", and the guard below exited 0 — so
+# every agent edit was silently dropped and every commit was reported as human-only.
+# Do not narrow these expressions to a single casing again.
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // .toolName // "unknown"' 2>/dev/null || echo "unknown")
+FILE_PATH=$(echo "$INPUT" | jq -r '
+  (.tool_input // .toolInput // {}) as $in
+  | $in.path // $in.targetFile // "unknown"
+  ' 2>/dev/null || echo "unknown")
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-# Skip if we couldn't determine the file
+# Skip if we couldn't determine the file.
+# This is the failure mode that hid the casing bug, so it complains on the way out instead
+# of exiting silently. Still exit 0: a PostToolUse hook must never block the tool.
 if [ "$FILE_PATH" = "unknown" ] || [ "$FILE_PATH" = "null" ]; then
+  echo "[attribution] WARNING: could not find a file path in the PostToolUse payload." >&2
+  echo "[attribution]   tool_name=${TOOL_NAME}. The payload shape may have changed;" >&2
+  echo "[attribution]   this edit is NOT being attributed. See README.md Troubleshooting." >&2
   exit 0
 fi
 
