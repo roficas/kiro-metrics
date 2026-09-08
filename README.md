@@ -9,7 +9,8 @@ Companion code for the blog post **"Metrics your board will trust: measuring age
 Two parts:
 
 1. **Write side** — a Kiro hook + git hooks that automatically tag every commit with AI attribution data. No changes to your source files. Everything lives in commit messages and git notes.
-2. **Read side** — a CLI that reads those tags from any repo and computes metrics.
+2. **The contract** — CI (GitHub Actions *or* GitLab CI) rebuilds a standard artifact, `metrics/attribution-log.jsonl`, and commits it to the repo. This is the boundary between the two sides.
+3. **Read side** — a CLI that reads that artifact and computes metrics. It never talks to a git-host API and never touches git, so GitHub, GitLab, and self-hosted GitLab all work identically.
 
 ## Quick start
 
@@ -96,7 +97,7 @@ rather than counting every line as human. See
 cd kiro-metrics-demo
 npm install
 
-# Run against any repo with the hooks installed
+# Run against a local checkout (reads its metrics/attribution-log.jsonl)
 npx tsx src/index.ts --repo /path/to/your-project
 
 # Different views
@@ -110,16 +111,20 @@ npx tsx src/index.ts --repo /path/to/your-project --format md
 # Self-contained HTML report (inlined CSS, no external requests) (semi-tested)
 npx tsx src/index.ts --repo /path/to/your-project --format html > attribution-report.html
 
-# GitHub remote (requires GITHUB_TOKEN)
-export GITHUB_TOKEN=ghp_...
-npx tsx src/index.ts --repo owner/repo
+# Remote — point at the raw URL of the committed log (any host)
+npx tsx src/index.ts --repo https://raw.githubusercontent.com/owner/repo/main/metrics/attribution-log.jsonl
+npx tsx src/index.ts --repo https://gitlab.aws.dev/group/proj/-/raw/main/metrics/attribution-log.jsonl
+
+# Private repo? Export a token (host-agnostic, sent as a Bearer header)
+export METRICS_TOKEN=<token>
+npx tsx src/index.ts --repo https://gitlab.aws.dev/group/proj/-/raw/main/metrics/attribution-log.jsonl
 ```
 
 ## CLI flags
 
 | Flag | Description | Default |
 |---|---|---|
-| `--repo <path-or-url>` | Local path or GitHub `owner/repo` | `.` |
+| `--repo <path-or-url>` | Local repo/dir path, or a raw URL to `metrics/attribution-log.jsonl` | `.` |
 | `--since <date>` | Start of range (`30d`, `3m`, `2026-07-01`) | `30d` |
 | `--until <date>` | End of range | `now` |
 | `--author <name>` | Filter to one contributor | all |
@@ -319,39 +324,83 @@ You're tracking the ephemeral files. See the untracking steps in [Quick start](#
 ## Development
 
 ```bash
-npm run test         # Run tests (24 passing)
+npm run test         # Run tests (39 passing)
 npm run lint         # Run ESLint
 npm run build        # Compile TypeScript
 npm run metrics      # Run the CLI
 ```
 
-## Remote metrics via GitHub Actions
+## The contract: `metrics/attribution-log.jsonl`
 
-By default, the GitHub API can't read git notes. To get full attribution data (including file-level breakdowns) when running against a remote repo, add the GitHub Actions workflow:
+The read side never queries a git-host API. Instead, CI rebuilds a standard artifact and
+commits it to the repo, and the CLI reads that file. Because the tool only ever reads a
+file — a local path or a raw URL — GitHub, GitLab, and self-hosted GitLab all work with the
+same code and no host-specific configuration.
 
-### Setup
+### Schema (one JSON object per line, chronological)
 
-1. Copy `.github/workflows/attribution-log.yml` to your repo
-2. Push your notes ref so the action can read it:
-   ```bash
-   git push origin refs/notes/ai-attribution
-   ```
-3. The workflow runs on every push to `main` and appends attribution data to `metrics/attribution-log.jsonl`
+```json
+{
+  "sha": "abc123",
+  "author": "Roger",
+  "email": "roger@example.com",
+  "date": "2026-08-04T15:20:54-04:00",
+  "message": "feat: add metrics reader pipeline",
+  "trailers": {
+    "ai_authored_by": "kiro",
+    "ai_authorship": "assisted",
+    "ai_attribution": null,
+    "ai_lines": 2781,
+    "human_lines": 3775
+  },
+  "notes": {
+    "ai_lines": 2781, "human_lines": 3775, "total_lines": 6556,
+    "ai_files": ["src/..."], "human_files": ["README.md"]
+  }
+}
+```
 
-### What the action does
+`notes` is `null` when git notes were unavailable at generation time (the log still works,
+just without the file-level breakdown). A malformed line is skipped with a warning rather
+than aborting the report.
 
-On each push to `main`:
-1. Fetches the `refs/notes/ai-attribution` ref
-2. Iterates new commits since the last logged entry
-3. Extracts trailers + notes for each commit
-4. Appends a JSON line per commit to `metrics/attribution-log.jsonl`
-5. Commits the updated file back to the repo
+### Generating the log
 
-### How the CLI uses it
+The single generator, `scripts/backfill-attribution-log.sh`, rebuilds the log from full
+history. It is idempotent and self-healing — entries written before the notes ref was pushed
+pick up their file-level data on the next run. Both CI pipelines call this same script, so CI
+and local runs cannot drift.
 
-When you run `kiro-metrics --repo owner/repo`, the GitHub connector:
-1. Tries to read `metrics/attribution-log.jsonl` from the repo (one API call, full data)
-2. If the file doesn't exist, falls back to parsing commit messages via the commits API (trailers only, no file-level breakdown)
+Run it locally any time:
+```bash
+./scripts/backfill-attribution-log.sh
+```
+
+### Automating it with CI (pick your host)
+
+Both templates call the shared script and emit the identical contract.
+
+**GitHub** — copy `.github/workflows/attribution-log.yml`. GitHub does not retrigger a
+workflow from a push made with the default token, so no loop guard is needed.
+
+**GitLab (incl. gitlab.aws.dev)** — copy `.gitlab-ci.yml`. It needs an `ATTRIBUTION_PUSH_TOKEN`
+CI/CD variable (a project access token with `write_repository`), because `CI_JOB_TOKEN`
+cannot push to its own repo. Loop prevention is built in (`[skip ci]`, `--push-option=ci.skip`,
+and a `workflow:` rule). If the token is absent the job still runs and reports what it would
+change, but never fails the pipeline — attribution is observability, not a merge gate.
+
+Either way, push your notes ref so CI can read the file-level data:
+```bash
+git push origin refs/notes/ai-attribution
+```
+
+### How the CLI consumes it
+
+`--repo` accepts:
+- a **local path** — a repo directory (looks for `metrics/attribution-log.jsonl` inside it) or a direct path to the file
+- a **raw URL** — the file served by any host (GitHub raw, GitLab raw, gitlab.aws.dev raw)
+
+For a private repo, export `METRICS_TOKEN` and it's sent as a `Bearer` header.
 
 ### Pushing git notes
 

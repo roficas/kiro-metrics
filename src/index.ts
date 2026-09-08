@@ -7,7 +7,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { Command } from "commander";
-import { createConnector, isGitHubRepo } from "./connector/index.js";
+import { createConnector, isUrl } from "./connector/index.js";
 import { computeMetrics } from "./consolidation/engine.js";
 import { generateReport } from "./report/index.js";
 import type { ReportFormat, ReportView } from "./report/types.js";
@@ -17,10 +17,14 @@ const program = new Command();
 program
   .name("kiro-metrics")
   .description(
-    "CLI tool that reads AI code attribution data from git repos and produces four-tier metrics reports"
+    "Reads the AI attribution log (metrics/attribution-log.jsonl) and produces four-tier metrics reports"
   )
   .version("0.1.0")
-  .option("--repo <path-or-url>", "Local path or GitHub owner/repo", ".")
+  .option(
+    "--repo <path-or-url>",
+    "Local repo/dir path, or a raw URL to metrics/attribution-log.jsonl",
+    "."
+  )
   .option(
     "--since <date>",
     "Start of date range (ISO date or relative: 30d, 3m)",
@@ -104,8 +108,8 @@ function resolveOutputPath(
 ): string {
   if (typeof out === "string" && out.length > 0) return resolve(out);
 
-  // Only a local checkout has a project root to write into; owner/repo does not.
-  const root = isGitHubRepo(repo) ? process.cwd() : resolve(repo);
+  // Only a local checkout has a project root to write into; a remote URL does not.
+  const root = isUrl(repo) ? process.cwd() : resolve(repo);
   const date = new Date().toISOString().slice(0, 10);
   return join(root, "metrics", "reports", `${view}-${date}.${FORMAT_EXTENSIONS[format]}`);
 }
@@ -136,24 +140,23 @@ async function run(options: CliOptions): Promise<void> {
 
   if (commits.length === 0) {
     console.error(
-      "\n  No commits found for the given filters.\n" +
+      "\n  No entries found in the attribution log for the given filters.\n" +
         "  Tips:\n" +
         "    - Check the --since and --until range\n" +
-        "    - Verify the --repo path is a git repository\n" +
-        "    - If no attribution data exists, install the hooks first:\n" +
-        "      ./scripts/hooks/install-hooks.sh\n"
+        "    - Regenerate the log: ./scripts/backfill-attribution-log.sh\n" +
+        "    - For a remote repo, verify the raw URL points to metrics/attribution-log.jsonl\n"
     );
     process.exit(1);
   }
 
-  // Check if any commits have attribution data
+  // Check if any entries carry attribution data
   const hasAttribution = commits.some(
     (c) => c.trailers.aiAuthoredBy !== undefined || c.notes !== undefined
   );
 
   if (!hasAttribution) {
     console.error(
-      "\n  Warning: No AI attribution data found in the commit history.\n" +
+      "\n  Warning: No AI attribution data found in the log.\n" +
         "  The metrics will show 0% involvement and authorship.\n" +
         "  To start collecting attribution data, install the hooks:\n" +
         "    ./scripts/hooks/install-hooks.sh\n"
