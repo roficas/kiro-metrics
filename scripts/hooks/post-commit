@@ -38,9 +38,20 @@ fi
 # Clear the edit log for the next cycle, but PRESERVE the session marker.
 # Dropping it would make every commit after the first in a session look like capture
 # had broken, forcing them all to 'unknown'.
+# `{session: (.session // empty), ...}` looks like a safe default but is not: jq's `empty`
+# yields zero results, and an object constructor with a zero-result value produces no output
+# at all. On a marker-less tracking file that wrote a 0-byte file, and log-ai-edit.sh's
+# `[ ! -f ]` guard does not fire on an existing-but-empty file — so jq then read no input,
+# emitted nothing, and every subsequent agent edit was silently discarded. Branch on
+# has("session") instead, and refuse to replace the file with an empty one.
 if [ -f "$TRACKING_FILE" ] && jq -e . "$TRACKING_FILE" >/dev/null 2>&1; then
-  jq '{session: (.session // empty), edits: []}' "$TRACKING_FILE" > "${TRACKING_FILE}.tmp" \
-    && mv "${TRACKING_FILE}.tmp" "$TRACKING_FILE"
+  if jq 'if has("session") then {session: .session, edits: []} else {edits: []} end' \
+       "$TRACKING_FILE" > "${TRACKING_FILE}.tmp" 2>/dev/null && [ -s "${TRACKING_FILE}.tmp" ]; then
+    mv "${TRACKING_FILE}.tmp" "$TRACKING_FILE"
+  else
+    rm -f "${TRACKING_FILE}.tmp"
+    echo '{"edits":[]}' > "$TRACKING_FILE"
+  fi
 else
   echo '{"edits":[]}' > "$TRACKING_FILE"
 fi

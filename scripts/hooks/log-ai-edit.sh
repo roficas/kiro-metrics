@@ -78,8 +78,12 @@ fi
 # Normalise a leading ./ so paths match git's output exactly
 FILE_PATH="${FILE_PATH#./}"
 
-# Initialize tracking file if it doesn't exist
-if [ ! -f "$TRACKING_PATH" ]; then
+# Initialize the tracking file if it is missing, empty, or not valid JSON.
+# Testing only `[ ! -f ]` is not enough: a 0-byte or corrupt file passes that check, then
+# jq reads no input, emits nothing, and the mv below overwrites the file with nothing —
+# so the hook keeps exiting 0 while silently dropping every edit. Empty and corrupt must
+# be treated as "needs init", not as "already fine".
+if [ ! -s "$TRACKING_PATH" ] || ! jq -e . "$TRACKING_PATH" >/dev/null 2>&1; then
   echo '{"edits":[]}' > "$TRACKING_PATH"
 fi
 
@@ -91,7 +95,15 @@ ENTRY=$(jq -n \
   --arg author "kiro" \
   '{file: $file, tool: $tool, timestamp: $ts, author: $author}')
 
-jq --argjson entry "$ENTRY" '.edits += [$entry]' "$TRACKING_PATH" > "${TRACKING_PATH}.tmp" \
-  && mv "${TRACKING_PATH}.tmp" "$TRACKING_PATH"
+# Guard the mv on a non-empty result so a jq failure can never truncate the log. Silent
+# truncation is the worst outcome here: attribution keeps "working" while recording nothing,
+# and the missing edits surface later as fabricated human-authored lines.
+if jq --argjson entry "$ENTRY" '.edits += [$entry]' "$TRACKING_PATH" > "${TRACKING_PATH}.tmp" 2>/dev/null \
+   && [ -s "${TRACKING_PATH}.tmp" ]; then
+  mv "${TRACKING_PATH}.tmp" "$TRACKING_PATH"
+else
+  rm -f "${TRACKING_PATH}.tmp"
+  echo "[attribution] WARNING: failed to record edit for ${FILE_PATH}; tracking log left unchanged." >&2
+fi
 
 exit 0
