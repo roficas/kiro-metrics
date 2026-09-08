@@ -358,9 +358,30 @@ Git notes live in a separate ref and aren't pushed by default:
 git push origin refs/notes/ai-attribution
 ```
 
-Or add to your push config so it happens automatically:
+The explicit push is the recommended form, because it changes no configuration.
+
+To make it automatic you must add **two** refspecs, not one:
 ```bash
+git config --add remote.origin.push HEAD
 git config --add remote.origin.push refs/notes/ai-attribution
+```
+
+Adding only the notes refspec is a trap. Setting `remote.origin.push` at all *replaces* the
+default push behaviour rather than adding to it, so with just that one line a bare `git push`
+pushes the notes ref and silently leaves your branch behind — local `main` advances while the
+remote stays put, and the push reports success. The `HEAD` refspec restores normal
+current-branch pushing alongside the notes.
+
+Verify immediately after setting it:
+```bash
+git push --dry-run    # must list your branch, not just refs/notes/ai-attribution
+```
+
+Once the CI job starts appending notes of its own, a plain notes push can be rejected as
+non-fast-forward. Resolve by merging, never with `--force`:
+```bash
+git fetch origin refs/notes/ai-attribution:refs/notes/ai-attribution
+git notes --ref=ai-attribution merge -s cat_sort_uniq
 ```
 
 ## Design decisions
