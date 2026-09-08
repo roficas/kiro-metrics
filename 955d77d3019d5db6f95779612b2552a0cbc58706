@@ -1,0 +1,1 @@
+{"attribution_state":"measured","ai_lines":173,"human_lines":0,"total_lines":173,"excluded_lines":0,"ai_files":["docs/decisions/002-submodule-path-prefix.md","scripts/hooks/install-hooks.sh","scripts/hooks/log-ai-edit.sh"],"human_files":[],"excluded_files":[]}
