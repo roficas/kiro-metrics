@@ -1,0 +1,1 @@
+{"attribution_state":"measured","ai_lines":579,"human_lines":0,"total_lines":579,"excluded_lines":0,"ai_files":["README.md","src/connector/index.ts","src/connector/log-reader.ts","src/index.ts","tests/connector/log-reader.test.ts"],"human_files":[],"excluded_files":[]}
