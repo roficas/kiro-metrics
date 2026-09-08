@@ -20,6 +20,14 @@ set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
+# Window is overridable via SINCE (e.g. SINCE=7d ./scripts/report.sh all). Defaults to 90d.
+SINCE="${SINCE:-90d}"
+
+# Pin one run timestamp for the whole invocation so that `all` — which calls the CLI a
+# dozen times — writes every report into the same run folder instead of a dozen folders
+# a second apart. Exported so each CLI child sees it. Format matches the CLI's validator.
+export KIRO_METRICS_RUN_TS="${KIRO_METRICS_RUN_TS:-$(date -u +%Y%m%d-%H%M%S)}"
+
 VIEW="${1:-team}"
 shift || true
 
@@ -56,13 +64,13 @@ fi
 run_one() {
   local view="$1"
   shift
-  "${RUN[@]}" --repo "$REPO_ROOT" --view "$view" --since 90d ${@+"$@"}
+  "${RUN[@]}" --repo "$REPO_ROOT" --view "$view" --since "$SINCE" ${@+"$@"}
 }
 
 if [ "$VIEW" = "all" ]; then
   # Author is required for the developer view, so derive the top contributor rather than
   # failing. Falls back to skipping that view if the log has no attributed commits yet.
-  TOP_AUTHOR=$("${RUN[@]}" --repo "$REPO_ROOT" --view team --since 90d --format json 2>/dev/null \
+  TOP_AUTHOR=$("${RUN[@]}" --repo "$REPO_ROOT" --view team --since "$SINCE" --format json 2>/dev/null \
     | jq -r '.byAuthor[0].author // empty' || true)
 
   for v in team board developer; do

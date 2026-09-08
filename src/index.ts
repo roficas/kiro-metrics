@@ -96,22 +96,52 @@ const FORMAT_EXTENSIONS: Record<ReportFormat, string> = {
 };
 
 /**
+ * A filesystem-safe run timestamp (YYYYMMDD-HHMMSS, UTC).
+ *
+ * Honours KIRO_METRICS_RUN_TS when set so a batch (report.sh all) that invokes the CLI
+ * many times can pin one shared folder across all of them. Falls back to now otherwise.
+ */
+function runTimestamp(): string {
+  const override = process.env["KIRO_METRICS_RUN_TS"];
+  if (override && /^\d{8}-\d{6}$/.test(override)) return override;
+  return new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
+}
+
+/** Turn a period into a compact, path-safe label like "2026-09-01_to_2026-09-08". */
+function periodLabel(period: { since: string; until: string }): string {
+  const since = period.since.slice(0, 10);
+  const until = period.until.slice(0, 10);
+  return `${since}_to_${until}`;
+}
+
+/**
  * Resolve where to write. Reports are generated output, so they belong beside the data
  * they summarise but must not be mistaken for it: metrics/attribution-log.jsonl is an
  * input maintained by CI, while metrics/reports/ is disposable and gitignored.
+ *
+ * Each run gets its own subfolder named "<runTimestamp>_<period>" so re-running with a
+ * different window (or the same one) never overwrites an earlier report. Within a folder,
+ * files are named by view alone (period is already in the folder name).
  */
 function resolveOutputPath(
   out: boolean | string,
   repo: string,
   view: ReportView,
-  format: ReportFormat
+  format: ReportFormat,
+  period: { since: string; until: string }
 ): string {
   if (typeof out === "string" && out.length > 0) return resolve(out);
 
   // Only a local checkout has a project root to write into; a remote URL does not.
   const root = isUrl(repo) ? process.cwd() : resolve(repo);
-  const date = new Date().toISOString().slice(0, 10);
-  return join(root, "metrics", "reports", `${view}-${date}.${FORMAT_EXTENSIONS[format]}`);
+  const folder = `${runTimestamp()}_${periodLabel(period)}`;
+  return join(
+    root,
+    "metrics",
+    "reports",
+    folder,
+    `${view}.${FORMAT_EXTENSIONS[format]}`
+  );
 }
 
 async function run(options: CliOptions): Promise<void> {
@@ -178,7 +208,13 @@ async function run(options: CliOptions): Promise<void> {
     return;
   }
 
-  const target = resolveOutputPath(options.out, options.repo, view, format);
+  const target = resolveOutputPath(
+    options.out,
+    options.repo,
+    view,
+    format,
+    metrics.period
+  );
   mkdirSync(dirname(target), { recursive: true });
   writeFileSync(target, report + "\n", "utf-8");
   // Path goes to stderr so `--out` remains composable with shell redirection.
