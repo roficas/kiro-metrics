@@ -1,0 +1,1 @@
+{"attribution_state":"measured","ai_lines":228,"human_lines":0,"total_lines":228,"excluded_lines":0,"ai_files":["scripts/hooks/lib-generated.sh","scripts/hooks/pre-commit","scripts/reclassify-notes.sh"],"human_files":[],"excluded_files":[]}
