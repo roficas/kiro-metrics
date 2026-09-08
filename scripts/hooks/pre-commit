@@ -24,27 +24,27 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 TRACKING_FILE="${REPO_ROOT}/.kiro-attribution.json"
 ATTRIBUTION_SUMMARY="${REPO_ROOT}/.kiro-attribution-staged.json"
 
-# Paths whose contents are produced by a tool rather than authored by anyone. Matched as
-# glob patterns against the repo-relative path git reports, so directory entries need the
-# `*` prefix to match at any depth.
-is_generated() {
-  case "$1" in
-    # Attribution tracking scratch files — counting these would let the tracker
-    # inflate its own human numbers.
-    .kiro-attribution.json|.kiro-attribution-staged.json|*/.kiro-attribution.json|*/.kiro-attribution-staged.json) return 0 ;;
-    # Dependency lock files
-    *package-lock.json|*npm-shrinkwrap.json|*yarn.lock|*pnpm-lock.yaml|*bun.lockb) return 0 ;;
-    *Cargo.lock|*poetry.lock|*Pipfile.lock|*uv.lock|*composer.lock|*Gemfile.lock|*go.sum) return 0 ;;
-    # Vendored dependencies and build output
-    node_modules/*|*/node_modules/*|vendor/*|*/vendor/*) return 0 ;;
-    dist/*|*/dist/*|build/*|*/build/*|out/*|*/out/*|target/*|*/target/*) return 0 ;;
-    .next/*|*/.next/*|coverage/*|*/coverage/*) return 0 ;;
-    # Minified bundles, source maps, and conventional codegen output
-    *.min.js|*.min.css|*.map) return 0 ;;
-    *.generated.*|*_pb2.py|*_pb2_grpc.py|*.pb.go|*.g.dart) return 0 ;;
-  esac
-  return 1
-}
+# is_generated() lives in lib-generated.sh so that pre-commit and reclassify-notes.sh
+# cannot drift apart. If the library is missing, fail OPEN: a pre-commit hook must never
+# block a commit, but say so loudly, because silently classifying nothing as generated is
+# how the lockfile problem appeared in the first place.
+_HOOK_DIR_SRC="${BASH_SOURCE[0]}"
+while [ -L "$_HOOK_DIR_SRC" ]; do
+  _d="$(cd -P "$(dirname "$_HOOK_DIR_SRC")" && pwd)"
+  _HOOK_DIR_SRC="$(readlink "$_HOOK_DIR_SRC")"
+  case "$_HOOK_DIR_SRC" in /*) ;; *) _HOOK_DIR_SRC="${_d}/${_HOOK_DIR_SRC}" ;; esac
+done
+HOOK_DIR="$(cd -P "$(dirname "$_HOOK_DIR_SRC")" && pwd)"
+
+if [ -f "${HOOK_DIR}/lib-generated.sh" ]; then
+  # shellcheck source=lib-generated.sh
+  . "${HOOK_DIR}/lib-generated.sh"
+else
+  echo "[attribution] WARNING: ${HOOK_DIR}/lib-generated.sh not found." >&2
+  echo "[attribution]   Generated files (lockfiles, build output) will be counted as" >&2
+  echo "[attribution]   human-authored, understating AI authorship." >&2
+  is_generated() { return 1; }
+fi
 
 # Drop any summary left behind by an aborted or amended commit. Every exit path below
 # either writes a fresh summary or intentionally leaves none, so a stale file can never
