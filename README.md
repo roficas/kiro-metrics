@@ -401,3 +401,5 @@ See [ADR-001: AI Code Attribution](docs/decisions/001-ai-code-attribution.md) fo
 MIT-0
 
 <!-- manual edit, typed by hand to test human attribution -->
+
+<!-- second manual edit: validating human-only attribution -->
