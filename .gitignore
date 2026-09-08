@@ -25,3 +25,6 @@ coverage/
 
 # Logs
 *.log
+
+# Generated reports (kiro-metrics --out). Disposable; attribution-log.jsonl is not.
+metrics/reports/

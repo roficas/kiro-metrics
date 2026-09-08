@@ -4,8 +4,10 @@
  * Reads AI code attribution data from git repos and produces four-tier metrics reports.
  */
 
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { Command } from "commander";
-import { createConnector } from "./connector/index.js";
+import { createConnector, isGitHubRepo } from "./connector/index.js";
 import { computeMetrics } from "./consolidation/engine.js";
 import { generateReport } from "./report/index.js";
 import type { ReportFormat, ReportView } from "./report/types.js";
@@ -51,6 +53,12 @@ program
     "Count CI/bot commits in the rates (excluded by default)",
     false
   )
+  // Optional value: bare --out picks the conventional path, --out <file> overrides it,
+  // and omitting it keeps stdout so piping to jq or a file still works unchanged.
+  .option(
+    "--out [path]",
+    "Write to a file instead of stdout. Bare flag uses <repo>/metrics/reports/"
+  )
   .action(async (options) => {
     try {
       await run(options);
@@ -72,6 +80,34 @@ interface CliOptions {
   hourlyRate?: number;
   hoursPerCommit?: number;
   includeBots?: boolean;
+  /** true when --out was passed bare, a string when given a path, undefined when absent. */
+  out?: boolean | string;
+}
+
+const FORMAT_EXTENSIONS: Record<ReportFormat, string> = {
+  terminal: "txt",
+  json: "json",
+  md: "md",
+  html: "html",
+};
+
+/**
+ * Resolve where to write. Reports are generated output, so they belong beside the data
+ * they summarise but must not be mistaken for it: metrics/attribution-log.jsonl is an
+ * input maintained by CI, while metrics/reports/ is disposable and gitignored.
+ */
+function resolveOutputPath(
+  out: boolean | string,
+  repo: string,
+  view: ReportView,
+  format: ReportFormat
+): string {
+  if (typeof out === "string" && out.length > 0) return resolve(out);
+
+  // Only a local checkout has a project root to write into; owner/repo does not.
+  const root = isGitHubRepo(repo) ? process.cwd() : resolve(repo);
+  const date = new Date().toISOString().slice(0, 10);
+  return join(root, "metrics", "reports", `${view}-${date}.${FORMAT_EXTENSIONS[format]}`);
 }
 
 async function run(options: CliOptions): Promise<void> {
@@ -133,7 +169,17 @@ async function run(options: CliOptions): Promise<void> {
 
   // Generate and output report
   const report = generateReport(metrics, { view, format, author: options.author });
-  process.stdout.write(report + "\n");
+
+  if (options.out === undefined || options.out === false) {
+    process.stdout.write(report + "\n");
+    return;
+  }
+
+  const target = resolveOutputPath(options.out, options.repo, view, format);
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, report + "\n", "utf-8");
+  // Path goes to stderr so `--out` remains composable with shell redirection.
+  console.error(`  Report written to ${target}`);
 }
 
 function validateView(input: string): ReportView {
