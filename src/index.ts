@@ -46,6 +46,11 @@ program
     "Estimated hours per delivery unit (default: 2)",
     parseFloat
   )
+  .option(
+    "--include-bots",
+    "Count CI/bot commits in the rates (excluded by default)",
+    false
+  )
   .action(async (options) => {
     try {
       await run(options);
@@ -66,6 +71,7 @@ interface CliOptions {
   format: string;
   hourlyRate?: number;
   hoursPerCommit?: number;
+  includeBots?: boolean;
 }
 
 async function run(options: CliOptions): Promise<void> {
@@ -122,6 +128,7 @@ async function run(options: CliOptions): Promise<void> {
   const metrics = computeMetrics(commits, {
     hourlyRate: options.hourlyRate,
     hoursPerCommit: options.hoursPerCommit,
+    includeBots: options.includeBots ?? false,
   });
 
   // Generate and output report

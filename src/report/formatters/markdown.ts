@@ -60,7 +60,15 @@ export function formatTeamMarkdown(report: TeamReport): string {
   lines.push(
     `| Delivery Frequency | ${report.summary.deliveryFrequency} commits/week |`
   );
-  lines.push(`| Total Commits | ${report.summary.totalCommits} |`);
+  lines.push(`| Commits Measured | ${report.summary.totalCommits} |`);
+  if (report.summary.excluded.botCommits > 0) {
+    lines.push(`| Excluded — bot commits | ${report.summary.excluded.botCommits} |`);
+  }
+  if (report.summary.excluded.unknownCommits > 0) {
+    lines.push(
+      `| Excluded — unmeasurable | ${report.summary.excluded.unknownCommits} |`
+    );
+  }
 
   if (report.byAuthor.length > 0) {
     lines.push("");

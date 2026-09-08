@@ -30,18 +30,56 @@ export function weeksBetween(since: string, until: string): number {
 }
 
 /** Main consolidation function. */
+/**
+ * A commit is a bot commit if its author name carries the conventional `[bot]` suffix,
+ * or its email matches a known CI identity. Matching on the name alone would miss
+ * runners configured with a plain name; matching on email alone would miss forge
+ * defaults. Deliberately narrow: a false positive silently drops real work.
+ */
+export function isBotCommit(commit: CommitData): boolean {
+  if (/\[bot\]/i.test(commit.author)) return true;
+  return /^(github-actions|gitlab-ci|gitlab-ci-bot|dependabot|renovate)[-@]/i.test(
+    commit.authorEmail
+  );
+}
+
+/** A commit whose attribution could not be measured, as opposed to being human-authored. */
+export function isUnknownAttribution(commit: CommitData): boolean {
+  return commit.trailers.aiAttribution === "unknown";
+}
+
 export function computeMetrics(
   commits: CommitData[],
   options: ConsolidationOptions = {}
 ): MetricsResult {
-  const { hourlyRate, hoursPerCommit = 2 } = options;
+  const { hourlyRate, hoursPerCommit = 2, includeBots = false } = options;
 
   if (commits.length === 0) {
     return emptyResult();
   }
 
+  // Partition before any arithmetic. Both excluded classes would otherwise land in the
+  // human bucket and understate AI authorship: bot commits are machine-generated, and
+  // `unknown` means capture failed, not that a human typed it.
+  const botCommits = commits.filter(isBotCommit);
+  const unknownCommits = commits.filter(
+    (c) => !isBotCommit(c) && isUnknownAttribution(c)
+  );
+  const counted = commits.filter(
+    (c) => (includeBots || !isBotCommit(c)) && !isUnknownAttribution(c)
+  );
+
+  const excluded = {
+    botCommits: includeBots ? 0 : botCommits.length,
+    unknownCommits: unknownCommits.length,
+  };
+
+  if (counted.length === 0) {
+    return { ...emptyResult(), summary: { ...emptyResult().summary, excluded } };
+  }
+
   // Sort by date ascending for trend computation
-  const sorted = [...commits].sort(
+  const sorted = [...counted].sort(
     (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
   );
 
@@ -106,6 +144,7 @@ export function computeMetrics(
       authorshipRate: round(authorshipRate),
       deliveryFrequency: round(deliveryFrequency),
       ctsSwProxy: ctsSwProxy !== undefined ? round(ctsSwProxy) : undefined,
+      excluded,
     },
     byFile,
     byAuthor,
@@ -265,6 +304,7 @@ function emptyResult(): MetricsResult {
       totalHumanLines: 0,
       authorshipRate: 0,
       deliveryFrequency: 0,
+      excluded: { botCommits: 0, unknownCommits: 0 },
     },
     byFile: [],
     byAuthor: [],

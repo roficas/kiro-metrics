@@ -93,3 +93,34 @@ ai-authorship: invalid-value`;
     expect(result.aiAuthorship).toBeUndefined();
   });
 });
+
+describe("parseTrailers — unmeasurable and malformed values", () => {
+  it("captures ai-attribution: unknown", () => {
+    const t = parseTrailers("feat: x\n\nai-attribution: unknown\n");
+    expect(t.aiAttribution).toBe("unknown");
+  });
+
+  it("ignores an ai-attribution value other than unknown", () => {
+    const t = parseTrailers("feat: x\n\nai-attribution: something-else\n");
+    expect(t.aiAttribution).toBeUndefined();
+  });
+
+  it("leaves aiAttribution unset when the trailer is absent", () => {
+    const t = parseTrailers("feat: x\n\nai-lines: 5\nhuman-lines: 5\n");
+    expect(t.aiAttribution).toBeUndefined();
+  });
+
+  // parseInt("abc") is NaN, which would propagate into every total and make the
+  // authorship rate NaN rather than failing visibly.
+  it("rejects a non-numeric ai-lines instead of yielding NaN", () => {
+    const t = parseTrailers("feat: x\n\nai-lines: abc\nhuman-lines: 10\n");
+    expect(t.aiLines).toBeUndefined();
+    expect(t.humanLines).toBe(10);
+  });
+
+  it("still accepts a legitimate zero", () => {
+    const t = parseTrailers("feat: x\n\nai-lines: 0\nhuman-lines: 0\n");
+    expect(t.aiLines).toBe(0);
+    expect(t.humanLines).toBe(0);
+  });
+});

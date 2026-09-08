@@ -235,3 +235,104 @@ describe("computeMetrics", () => {
     expect(engineFile!.aiLines).toBe(50); // 100 / 2 files
   });
 });
+
+/**
+ * Exclusion rules. Both classes previously landed in the human bucket, which understated
+ * AI authorship: bot commits are machine-generated, and `ai-attribution: unknown` means
+ * capture failed rather than that a human wrote the code.
+ */
+describe("exclusions", () => {
+  const human = (sha: string, author = "Roger"): CommitData => ({
+    sha,
+    author,
+    authorEmail: "roger@example.com",
+    date: "2026-08-05T12:00:00Z",
+    message: "feat: work",
+    trailers: { aiAuthoredBy: "kiro", aiLines: 90, humanLines: 10 },
+  });
+
+  const bot = (sha: string, author: string, email: string): CommitData => ({
+    sha,
+    author,
+    authorEmail: email,
+    date: "2026-08-05T13:00:00Z",
+    message: "chore(metrics): update attribution log",
+    trailers: { aiLines: 0, humanLines: 0 },
+  });
+
+  const unknown = (sha: string): CommitData => ({
+    sha,
+    author: "Roger",
+    authorEmail: "roger@example.com",
+    date: "2026-08-05T14:00:00Z",
+    message: "feat: uncaptured",
+    trailers: { aiAttribution: "unknown" },
+  });
+
+  it("excludes bot commits from the rates by default", () => {
+    const r = computeMetrics([
+      human("a"),
+      bot("b", "github-actions[bot]", "github-actions[bot]@users.noreply.github.com"),
+      bot("c", "gitlab-ci[bot]", "gitlab-ci-bot@gitlab.example.com"),
+    ]);
+    expect(r.summary.totalCommits).toBe(1);
+    expect(r.summary.excluded.botCommits).toBe(2);
+    expect(r.summary.involvementRate).toBe(100);
+  });
+
+  it("detects a bot by email even when the name lacks a [bot] suffix", () => {
+    const r = computeMetrics([
+      human("a"),
+      bot("b", "GitLab CI", "gitlab-ci-bot@gitlab.example.com"),
+    ]);
+    expect(r.summary.excluded.botCommits).toBe(1);
+    expect(r.summary.totalCommits).toBe(1);
+  });
+
+  it("counts bot commits when includeBots is set", () => {
+    const r = computeMetrics(
+      [human("a"), bot("b", "github-actions[bot]", "gh@example.com")],
+      { includeBots: true }
+    );
+    expect(r.summary.totalCommits).toBe(2);
+    expect(r.summary.excluded.botCommits).toBe(0);
+    expect(r.summary.involvementRate).toBe(50);
+  });
+
+  it("excludes unmeasurable commits rather than counting them as human", () => {
+    const r = computeMetrics([human("a"), unknown("b")]);
+    expect(r.summary.totalCommits).toBe(1);
+    expect(r.summary.excluded.unknownCommits).toBe(1);
+    // The whole point: an unknown commit must not dilute authorship toward human.
+    expect(r.summary.authorshipRate).toBe(90);
+  });
+
+  it("does not double-count a commit that is both bot and unknown", () => {
+    const botUnknown: CommitData = {
+      ...bot("b", "github-actions[bot]", "gh@example.com"),
+      trailers: { aiAttribution: "unknown" },
+    };
+    const r = computeMetrics([human("a"), botUnknown]);
+    expect(r.summary.excluded.botCommits).toBe(1);
+    expect(r.summary.excluded.unknownCommits).toBe(0);
+    expect(r.summary.totalCommits).toBe(1);
+  });
+
+  it("reports exclusions even when every commit is filtered out", () => {
+    const r = computeMetrics([unknown("a"), unknown("b")]);
+    expect(r.summary.totalCommits).toBe(0);
+    expect(r.summary.excluded.unknownCommits).toBe(2);
+    expect(r.summary.authorshipRate).toBe(0);
+  });
+
+  it("keeps a human-only commit in the denominator", () => {
+    const humanOnly: CommitData = {
+      ...human("b"),
+      trailers: { aiAuthorship: "human-only", aiLines: 0, humanLines: 50 },
+    };
+    const r = computeMetrics([human("a"), humanOnly]);
+    expect(r.summary.totalCommits).toBe(2);
+    expect(r.summary.excluded.unknownCommits).toBe(0);
+    expect(r.summary.involvementRate).toBe(50);
+  });
+});

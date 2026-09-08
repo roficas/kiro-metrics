@@ -8,6 +8,13 @@ export interface CommitData {
   trailers: {
     aiAuthoredBy?: string;
     aiAuthorship?: "generated" | "assisted" | "human-only";
+    /**
+     * Set to "unknown" by prepare-commit-msg when edit capture could not be verified,
+     * meaning attribution for this commit is unmeasurable rather than human. Such
+     * commits must be excluded from rate denominators; counting them as human is the
+     * exact failure the marker exists to prevent.
+     */
+    aiAttribution?: "unknown";
     aiLines?: number;
     humanLines?: number;
   };

@@ -36,11 +36,21 @@ export function parseTrailers(message: string): CommitData["trailers"] {
     trailers.aiAuthorship = aiAuthorship;
   }
 
+  if (extractTrailer(message, "ai-attribution") === "unknown") {
+    trailers.aiAttribution = "unknown";
+  }
+
+  // parseInt on a non-numeric trailer yields NaN, which would propagate silently into
+  // every total and render the authorship rate NaN. Reject it here instead.
   const aiLines = extractTrailer(message, "ai-lines");
-  if (aiLines) trailers.aiLines = parseInt(aiLines, 10);
+  if (aiLines !== undefined && Number.isInteger(Number(aiLines))) {
+    trailers.aiLines = Number(aiLines);
+  }
 
   const humanLines = extractTrailer(message, "human-lines");
-  if (humanLines) trailers.humanLines = parseInt(humanLines, 10);
+  if (humanLines !== undefined && Number.isInteger(Number(humanLines))) {
+    trailers.humanLines = Number(humanLines);
+  }
 
   return trailers;
 }

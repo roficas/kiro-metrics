@@ -12,6 +12,7 @@ export interface TeamReport {
     deliveryFrequency: number;
     totalCommits: number;
     aiInvolvedCommits: number;
+    excluded: { botCommits: number; unknownCommits: number };
   };
   byAuthor: Array<{
     author: string;
@@ -54,6 +55,7 @@ export function buildTeamReport(metrics: MetricsResult): TeamReport {
       deliveryFrequency: metrics.summary.deliveryFrequency,
       totalCommits: metrics.summary.totalCommits,
       aiInvolvedCommits: metrics.summary.aiInvolvedCommits,
+      excluded: metrics.summary.excluded,
     },
     byAuthor,
     topAiFiles,

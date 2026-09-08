@@ -1,5 +1,32 @@
 name: Update Attribution Log
 
+# Keeps metrics/attribution-log.jsonl current so the CLI's GitHub connector can read
+# attribution over the API, which cannot see git notes.
+#
+# This job calls scripts/backfill-attribution-log.sh — the same script the GitLab
+# pipeline and local runs use. It previously reimplemented trailer and notes extraction
+# inline, which caused three defects the shared script does not have:
+#
+#   1. It was incremental (LAST_LOGGED..HEAD, skipping SHAs already present), so an
+#      entry written before refs/notes/ai-attribution was pushed kept `notes: null`
+#      forever — the run would never revisit it. Since file-level attribution lives only
+#      in the notes, byFile and the top-AI-files report sections stayed empty. The
+#      shared script rebuilds from full history, so it is self-healing.
+#   2. Trailer values were interpolated straight into JSON via --argjson. One malformed
+#      trailer emitted an invalid line and corrupted the log. The script validates.
+#   3. `ai-attribution: unknown` was not captured at all, making an unmeasurable commit
+#      indistinguishable from a genuinely human-only one.
+#
+# Tradeoff: a full rebuild is O(total history) per run rather than O(new commits). On
+# repositories with very large histories, prefer running this on a schedule instead of
+# every push, or reintroduce an incremental fast path that falls back to a full rebuild
+# whenever any entry still has notes: null.
+#
+# No loop guard is needed here. GitHub does not trigger workflows from pushes made with
+# the default GITHUB_TOKEN, so the commit below cannot retrigger this job. The GitLab
+# equivalent needs [skip ci] and a workflow rule precisely because it has no such
+# protection.
+
 on:
   push:
     branches: [main]
@@ -11,100 +38,52 @@ jobs:
   update-attribution-log:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout with full history and notes
+      - name: Checkout with full history
         uses: actions/checkout@v4
         with:
+          # The rebuild walks every commit; a shallow clone would silently truncate the log.
           fetch-depth: 0
 
       - name: Fetch attribution notes
         run: |
-          git fetch origin refs/notes/ai-attribution:refs/notes/ai-attribution 2>/dev/null || echo "No attribution notes ref found"
+          git fetch origin refs/notes/ai-attribution:refs/notes/ai-attribution 2>/dev/null \
+            || echo "No refs/notes/ai-attribution on origin — entries will have notes: null."
 
-      - name: Extract attribution from new commits
+      - name: Rebuild attribution log
         run: |
-          mkdir -p metrics
+          set -eu
 
-          # Get commits in this push that have ai-authored-by trailer
-          # Use GITHUB_SHA for the head and compare against what's already logged
-          LAST_LOGGED=""
-          if [ -f metrics/attribution-log.jsonl ]; then
-            LAST_LOGGED=$(tail -1 metrics/attribution-log.jsonl | jq -r '.sha // empty' 2>/dev/null || echo "")
+          if [ ! -x scripts/backfill-attribution-log.sh ]; then
+            echo "scripts/backfill-attribution-log.sh is missing or not executable." >&2
+            exit 1
           fi
 
-          # Get all commits on main with attribution trailers
-          if [ -n "$LAST_LOGGED" ]; then
-            RANGE="${LAST_LOGGED}..HEAD"
-          else
-            RANGE="HEAD"
-          fi
+          BEFORE=0
+          [ -f metrics/attribution-log.jsonl ] && BEFORE=$(wc -l < metrics/attribution-log.jsonl | tr -d ' ')
 
-          git log $RANGE --format='%H' --reverse 2>/dev/null | while read -r SHA; do
-            # Skip if already logged
-            if [ -f metrics/attribution-log.jsonl ] && grep -q "\"sha\":\"${SHA}\"" metrics/attribution-log.jsonl 2>/dev/null; then
-              continue
-            fi
+          bash scripts/backfill-attribution-log.sh
 
-            # Get commit metadata
-            AUTHOR=$(git log -1 --format='%an' "$SHA")
-            EMAIL=$(git log -1 --format='%ae' "$SHA")
-            DATE=$(git log -1 --format='%aI' "$SHA")
-            MESSAGE=$(git log -1 --format='%s' "$SHA")
-            FULL_MSG=$(git log -1 --format='%B' "$SHA")
-
-            # Parse trailers
-            AI_AUTHORED_BY=$(echo "$FULL_MSG" | grep -m1 '^ai-authored-by:' | sed 's/^ai-authored-by:\s*//' || echo "")
-            AI_AUTHORSHIP=$(echo "$FULL_MSG" | grep -m1 '^ai-authorship:' | sed 's/^ai-authorship:\s*//' || echo "")
-            AI_LINES=$(echo "$FULL_MSG" | grep -m1 '^ai-lines:' | sed 's/^ai-lines:\s*//' || echo "0")
-            HUMAN_LINES=$(echo "$FULL_MSG" | grep -m1 '^human-lines:' | sed 's/^human-lines:\s*//' || echo "0")
-
-            # Try to read git notes
-            NOTES=$(git notes --ref=ai-attribution show "$SHA" 2>/dev/null || echo "null")
-            if [ "$NOTES" = "null" ] || [ -z "$NOTES" ]; then
-              NOTES="null"
-            fi
-
-            # Build JSON entry
-            jq -n -c \
-              --arg sha "$SHA" \
-              --arg author "$AUTHOR" \
-              --arg email "$EMAIL" \
-              --arg date "$DATE" \
-              --arg message "$MESSAGE" \
-              --arg ai_authored_by "$AI_AUTHORED_BY" \
-              --arg ai_authorship "$AI_AUTHORSHIP" \
-              --argjson ai_lines "${AI_LINES:-0}" \
-              --argjson human_lines "${HUMAN_LINES:-0}" \
-              --argjson notes "$NOTES" \
-              '{
-                sha: $sha,
-                author: $author,
-                email: $email,
-                date: $date,
-                message: $message,
-                trailers: {
-                  ai_authored_by: (if $ai_authored_by == "" then null else $ai_authored_by end),
-                  ai_authorship: (if $ai_authorship == "" then null else $ai_authorship end),
-                  ai_lines: $ai_lines,
-                  human_lines: $human_lines
-                },
-                notes: $notes
-              }' >> metrics/attribution-log.jsonl
-          done
+          AFTER=$(wc -l < metrics/attribution-log.jsonl | tr -d ' ')
+          echo "attribution log: ${BEFORE} -> ${AFTER} entries"
 
       - name: Commit updated log
         run: |
+          set -eu
+
+          if git diff --quiet -- metrics/attribution-log.jsonl; then
+            echo "No attribution changes to commit."
+            exit 0
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add metrics/attribution-log.jsonl
-          if git diff --cached --quiet; then
-            echo "No new attribution entries to log"
-          else
-            ENTRIES=$(wc -l < metrics/attribution-log.jsonl | tr -d ' ')
-            # Build the message with printf so the trailers end up at column 0 of the commit
-            # message. Writing them at column 0 directly in this YAML would terminate the
-            # `run: |` block scalar and turn them into top-level workflow keys, which makes
-            # GitHub reject the whole file (startup failure, no job created).
-            COMMIT_MSG=$(printf 'chore(metrics): update attribution log (%s entries)\n\nai-authorship: human-only\nai-lines: 0\nhuman-lines: 0\n' "$ENTRIES")
-            git commit -m "$COMMIT_MSG"
-            git push
-          fi
+
+          ENTRIES=$(wc -l < metrics/attribution-log.jsonl | tr -d ' ')
+
+          # Deliberately emits no ai-* trailers. The previous version stamped
+          # `ai-authorship: human-only / ai-lines: 0 / human-lines: 0` on its own commit,
+          # asserting that a machine wrote it by hand. Consumers should exclude bot
+          # commits from rates rather than be told a falsehood about them.
+          git commit -m "chore(metrics): update attribution log (${ENTRIES} entries)"
+          git push

@@ -89,6 +89,11 @@ while read -r SHA; do
   AI_AUTHORSHIP=$(printf '%s\n' "$FULL_MSG" | grep -m1 '^ai-authorship:' | sed 's/^ai-authorship:[[:space:]]*//' || true)
   AI_LINES=$(printf '%s\n' "$FULL_MSG" | grep -m1 '^ai-lines:' | sed 's/^ai-lines:[[:space:]]*//' || true)
   HUMAN_LINES=$(printf '%s\n' "$FULL_MSG" | grep -m1 '^human-lines:' | sed 's/^human-lines:[[:space:]]*//' || true)
+  # `ai-attribution: unknown` is written by prepare-commit-msg when capture could not be
+  # verified. Without recording it, an unmeasurable commit is indistinguishable from a
+  # genuinely human-only one — which silently defeats the point of reporting `unknown`
+  # rather than guessing. Consumers need to exclude these from rates, not count them as human.
+  AI_ATTRIBUTION=$(printf '%s\n' "$FULL_MSG" | grep -m1 '^ai-attribution:' | sed 's/^ai-attribution:[[:space:]]*//' || true)
 
   AI_LINES=$(numeric_or_zero "$AI_LINES")
   HUMAN_LINES=$(numeric_or_zero "$HUMAN_LINES")
@@ -115,6 +120,7 @@ while read -r SHA; do
     --arg message "$MESSAGE" \
     --arg ai_authored_by "$AI_AUTHORED_BY" \
     --arg ai_authorship "$AI_AUTHORSHIP" \
+    --arg ai_attribution "$AI_ATTRIBUTION" \
     --argjson ai_lines "$AI_LINES" \
     --argjson human_lines "$HUMAN_LINES" \
     --argjson notes "$NOTES" \
@@ -127,6 +133,7 @@ while read -r SHA; do
       trailers: {
         ai_authored_by: (if $ai_authored_by == "" then null else $ai_authored_by end),
         ai_authorship: (if $ai_authorship == "" then null else $ai_authorship end),
+        ai_attribution: (if $ai_attribution == "" then null else $ai_attribution end),
         ai_lines: $ai_lines,
         human_lines: $human_lines
       },

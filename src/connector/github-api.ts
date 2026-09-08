@@ -15,6 +15,8 @@ interface AttributionLogEntry {
   trailers: {
     ai_authored_by: string | null;
     ai_authorship: string | null;
+    /** Optional: logs written before this field existed omit it entirely. */
+    ai_attribution?: string | null;
     ai_lines: number;
     human_lines: number;
   };
@@ -24,6 +26,8 @@ interface AttributionLogEntry {
     total_lines: number;
     ai_files: string[];
     human_files: string[];
+    excluded_lines?: number;
+    excluded_files?: string[];
   } | null;
 }
 
@@ -160,6 +164,8 @@ export class GitHubApiSource implements CommitSource {
         trailers: {
           aiAuthoredBy: entry.trailers.ai_authored_by ?? undefined,
           aiAuthorship: validAuthorship(entry.trailers.ai_authorship),
+          aiAttribution:
+            entry.trailers.ai_attribution === "unknown" ? "unknown" : undefined,
           // Use ?? not ||. A human-only commit legitimately has ai_lines: 0, and || would
           // coerce that 0 to undefined. The consolidation engine requires both aiLines and
           // humanLines to be defined before counting a commit, so the whole commit's lines

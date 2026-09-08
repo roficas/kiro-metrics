@@ -104,6 +104,20 @@ export function formatTeamTerminal(report: TeamReport): string {
       width
     )
   );
+  lines.push(
+    row(`Commits measured:          ${report.summary.totalCommits}`, width)
+  );
+  // Rates are computed over a filtered set, so state the filtering. Otherwise
+  // "Commits measured" silently disagrees with `git log` and the report looks broken.
+  {
+    const { botCommits, unknownCommits } = report.summary.excluded;
+    const parts: string[] = [];
+    if (botCommits > 0) parts.push(`${botCommits} bot`);
+    if (unknownCommits > 0) parts.push(`${unknownCommits} unmeasurable`);
+    if (parts.length > 0) {
+      lines.push(row(`  excluded: ${parts.join(", ")}`, width));
+    }
+  }
 
   if (report.byAuthor.length > 0) {
     lines.push(emptyRow(width));
