@@ -19,7 +19,11 @@
     "lint": "eslint src/ tests/",
     "lint:fix": "eslint src/ tests/ --fix",
     "hooks:install": "./scripts/hooks/install-hooks.sh",
-    "push-notes": "git push origin refs/notes/ai-attribution"
+    "push-notes": "git push origin refs/notes/ai-attribution",
+    "report": "./scripts/report.sh",
+    "report:team": "./scripts/report.sh team",
+    "report:board": "./scripts/report.sh board",
+    "report:all": "./scripts/report.sh all"
   },
   "dependencies": {
     "commander": "13.1.0"
