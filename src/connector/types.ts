@@ -14,9 +14,18 @@ export interface CommitData {
   notes?: {
     ai_lines: number;
     human_lines: number;
+    /** ai_lines + human_lines. Excludes generated files — see excluded_lines. */
     total_lines: number;
     ai_files: string[];
     human_files: string[];
+    /**
+     * Lines in tool-generated files (lockfiles, build output, vendored code) that
+     * pre-commit attributed to neither author. Deliberately outside total_lines so
+     * generated content cannot dilute the authorship rate. Optional: notes written
+     * before this field existed omit it.
+     */
+    excluded_lines?: number;
+    excluded_files?: string[];
   };
 }
 
