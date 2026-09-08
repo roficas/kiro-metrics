@@ -26,7 +26,6 @@ set -euo pipefail
 
 TRACKING_FILE=".kiro-attribution.json"
 PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-TRACKING_PATH="${PROJECT_ROOT}/${TRACKING_FILE}"
 
 # Drain stdin if the client provides session context, so we never block on a pipe.
 if [ ! -t 0 ]; then
@@ -35,14 +34,15 @@ fi
 
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-if [ ! -f "$TRACKING_PATH" ]; then
-  echo '{"edits":[]}' > "$TRACKING_PATH"
-fi
-
-# If the file is unreadable or malformed, start clean rather than fail the hook.
-if ! jq -e . "$TRACKING_PATH" >/dev/null 2>&1; then
-  echo '{"edits":[]}' > "$TRACKING_PATH"
-fi
+# Every repository the workspace can commit to needs its own marker, because each has its
+# own pre-commit reading its own tracking file (ADR-002). Marking only the superproject
+# left every submodule at captureVerified=false, so a genuinely human-only commit there
+# was reported as `unknown` — indistinguishable from broken capture.
+REPOS=("$PROJECT_ROOT")
+while read -r sub; do
+  [ -n "$sub" ] || continue
+  REPOS+=("$sub")
+done < <(git -C "$PROJECT_ROOT" submodule --quiet foreach --recursive 'printf "%s\n" "$(pwd)"' 2>/dev/null || true)
 
 # --- Capture probe --------------------------------------------------------------
 # "The client ran a hook" and "the logger understood the payload" are different
@@ -58,46 +58,63 @@ fi
 # The probe path is deliberately a file that never exists and is never staged, so
 # even if the cleanup below fails it cannot match a staged file in pre-commit and
 # cannot inflate anyone's attribution.
-PROBE_PATH=".attribution-capture-probe"
+PROBE_NAME=".attribution-capture-probe"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOGGER="${SCRIPT_DIR}/log-ai-edit.sh"
 
-CAPTURE_VERIFIED="false"
-if [ -f "$LOGGER" ]; then
-  BEFORE=$(jq -r '.edits | length' "$TRACKING_PATH" 2>/dev/null || echo 0)
+# Probe and mark one repository. The probe path is absolute and inside the target repo, so
+# per-file resolution in log-ai-edit.sh routes the entry to that repo's log rather than the
+# superproject's — which is what makes this verify the right thing for a submodule.
+mark_repo() {
+  local repo="$1"
+  local tracking="${repo}/${TRACKING_FILE}"
+  local probe_abs="${repo}/${PROBE_NAME}"
+  local verified="false"
 
-  # Mimic the real client payload shape, snake_case included.
-  printf '{"hook_event_name":"PostToolUse","tool_name":"capture_probe","tool_input":{"path":"%s"}}' \
-    "$PROBE_PATH" | bash "$LOGGER" >/dev/null 2>&1 || true
-
-  AFTER=$(jq -r '.edits | length' "$TRACKING_PATH" 2>/dev/null || echo 0)
-  LANDED=$(jq -r --arg p "$PROBE_PATH" \
-    '[.edits[]? | select(.file == $p)] | length' "$TRACKING_PATH" 2>/dev/null || echo 0)
-
-  if [ "$AFTER" -gt "$BEFORE" ] && [ "$LANDED" -gt 0 ]; then
-    CAPTURE_VERIFIED="true"
+  if [ ! -s "$tracking" ] || ! jq -e . "$tracking" >/dev/null 2>&1; then
+    echo '{"edits":[]}' > "$tracking"
   fi
 
-  # Drop the synthetic entry again; it is evidence, not attribution.
-  jq --arg p "$PROBE_PATH" '.edits = [.edits[]? | select(.file != $p)]' \
-    "$TRACKING_PATH" > "${TRACKING_PATH}.tmp" 2>/dev/null \
-    && mv "${TRACKING_PATH}.tmp" "$TRACKING_PATH" \
-    || rm -f "${TRACKING_PATH}.tmp"
-fi
+  if [ -f "$LOGGER" ]; then
+    local before after landed
+    before=$(jq -r '.edits | length' "$tracking" 2>/dev/null || echo 0)
 
-if [ "$CAPTURE_VERIFIED" != "true" ]; then
-  echo "[attribution] WARNING: hooks run, but the edit logger did not capture a test" >&2
-  echo "[attribution]   payload. Agent edits will NOT be attributed this session." >&2
-  echo "[attribution]   Commits will be recorded as 'unknown' rather than claimed as" >&2
-  echo "[attribution]   human-authored. Check scripts/hooks/log-ai-edit.sh against the" >&2
-  echo "[attribution]   payload your client sends. See README.md Troubleshooting." >&2
-fi
+    # Mimic the real client payload shape, snake_case included.
+    printf '{"hook_event_name":"PostToolUse","tool_name":"capture_probe","tool_input":{"path":"%s"}}' \
+      "$probe_abs" | bash "$LOGGER" >/dev/null 2>&1 || true
 
-jq --arg ts "$TIMESTAMP" --argjson capture "$CAPTURE_VERIFIED" \
-  '{session: {hooksAlive: true, captureVerified: $capture, verifiedAt: $ts,
-              trigger: "SessionStart"},
-    edits: (.edits // [])}' \
-  "$TRACKING_PATH" > "${TRACKING_PATH}.tmp" \
-  && mv "${TRACKING_PATH}.tmp" "$TRACKING_PATH"
+    after=$(jq -r '.edits | length' "$tracking" 2>/dev/null || echo 0)
+    landed=$(jq -r --arg p "$PROBE_NAME" \
+      '[.edits[]? | select(.file == $p)] | length' "$tracking" 2>/dev/null || echo 0)
+
+    if [ "$after" -gt "$before" ] && [ "$landed" -gt 0 ]; then
+      verified="true"
+    fi
+
+    # Drop the synthetic entry again; it is evidence, not attribution.
+    jq --arg p "$PROBE_NAME" '.edits = [.edits[]? | select(.file != $p)]' \
+      "$tracking" > "${tracking}.tmp" 2>/dev/null \
+      && mv "${tracking}.tmp" "$tracking" \
+      || rm -f "${tracking}.tmp"
+  fi
+
+  if [ "$verified" != "true" ]; then
+    echo "[attribution] WARNING: hooks run, but the edit logger did not capture a test" >&2
+    echo "[attribution]   payload in ${repo}. Agent edits there will NOT be attributed." >&2
+    echo "[attribution]   Commits will be recorded as 'unknown' rather than claimed as" >&2
+    echo "[attribution]   human-authored. See README.md Troubleshooting." >&2
+  fi
+
+  jq --arg ts "$TIMESTAMP" --argjson capture "$verified" \
+    '{session: {hooksAlive: true, captureVerified: $capture, verifiedAt: $ts,
+                trigger: "SessionStart"},
+      edits: (.edits // [])}' \
+    "$tracking" > "${tracking}.tmp" \
+    && mv "${tracking}.tmp" "$tracking"
+}
+
+for repo in "${REPOS[@]}"; do
+  mark_repo "$repo"
+done
 
 exit 0
