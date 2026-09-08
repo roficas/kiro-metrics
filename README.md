@@ -399,3 +399,5 @@ See [ADR-001: AI Code Attribution](docs/decisions/001-ai-code-attribution.md) fo
 ## License
 
 MIT-0
+
+<!-- manual edit, typed by hand to test human attribution -->
