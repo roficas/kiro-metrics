@@ -107,7 +107,7 @@ npx tsx src/index.ts --repo /path/to/your-project --view developer --author "You
 npx tsx src/index.ts --repo /path/to/your-project --format json
 npx tsx src/index.ts --repo /path/to/your-project --format md
 
-# Self-contained HTML report (inlined CSS, no external requests) (untested)
+# Self-contained HTML report (inlined CSS, no external requests) (semi-tested)
 npx tsx src/index.ts --repo /path/to/your-project --format html > attribution-report.html
 
 # GitHub remote (requires GITHUB_TOKEN)
