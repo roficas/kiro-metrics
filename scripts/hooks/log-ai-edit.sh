@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # log-ai-edit.sh
-# Called by the Kiro PostToolUse hook when fs_write, str_replace, or fs_append fires.
+# Called by the Kiro PostToolUse hook when any write tool fires: fs_write, str_replace,
+# fs_append, smart_relocate, or semantic_rename (see the matcher in
+# .kiro/hooks/track-ai-edits.json, and the field-extraction notes below).
 # Reads JSON from stdin (Kiro session context), extracts the file path and tool name,
 # and appends an attribution entry to .kiro-attribution.json.
 #
@@ -29,9 +31,13 @@ INPUT=$(cat)
 # every agent edit was silently dropped and every commit was reported as human-only.
 # Do not narrow these expressions to a single casing again.
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // .toolName // "unknown"' 2>/dev/null || echo "unknown")
+# Different write tools name their target differently:
+#   fs_write / str_replace / fs_append / semantic_rename -> path
+#   delete_file                                          -> targetFile
+#   smart_relocate                                       -> destinationPath
 FILE_PATH=$(echo "$INPUT" | jq -r '
   (.tool_input // .toolInput // {}) as $in
-  | $in.path // $in.targetFile // "unknown"
+  | $in.path // $in.destinationPath // $in.targetFile // "unknown"
   ' 2>/dev/null || echo "unknown")
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 

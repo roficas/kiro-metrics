@@ -5,7 +5,7 @@
       "name": "Track AI File Edits",
       "trigger": "PostToolUse",
       "description": "Logs every agent file-write to .kiro-attribution.json for line-level AI code attribution tracking",
-      "matcher": "fs_write|str_replace|fs_append",
+      "matcher": "fs_write|str_replace|fs_append|smart_relocate|semantic_rename",
       "action": {
         "type": "command",
         "command": "bash scripts/hooks/log-ai-edit.sh"
