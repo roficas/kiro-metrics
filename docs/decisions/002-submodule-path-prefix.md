@@ -1,139 +1,149 @@
-# ADR-002: Attribution Across Submodule Boundaries
+# ADR-002: Attribution Across Repository Boundaries
 
-**Status:** Proposed — not yet implemented
+**Status:** Accepted
 **Date:** 2026-09-08
 **Deciders:** roficas
-**Supersedes:** nothing. Extends ADR-001.
+**Extends:** ADR-001
+
+> Revised after implementation. The first draft proposed teaching `pre-commit` to look up
+> into the superproject and strip a submodule prefix. That was the wrong layer. See
+> *Alternatives Considered* for why the rejected option turned out to be the right one.
 
 ## Context
 
-ADR-001 established capture-at-edit-time attribution, and it works when the Kiro
-workspace and the git repository share a root. They do not share a root when the code
-being edited lives in a submodule, which is exactly the layout of this project: the
-workspace root is `devs-with-genai/`, and `kiro-metrics-demo/` is a submodule tracking
-`roficas/kiro-metrics`.
+ADR-001 captures attribution at edit time. It works when the Kiro workspace and the git
+repository share a root. They do not when a workspace spans more than one repository, and
+this project spans two: the workspace root `devs-with-genai/`, and the submodule
+`kiro-metrics-demo/` tracking `roficas/kiro-metrics`.
 
-The two halves of the pipeline resolve their paths from different places.
+`pre-commit` matches staged files against the tracking log with an **exact string
+comparison** against `git diff --cached --name-only`, which is repo-root-relative. Two
+things must therefore be true: the log must live where the committing repository looks for
+it, and its paths must be relative to that repository.
 
-`log-ai-edit.sh` runs from Kiro's working directory, which is the workspace root, so
-`git rev-parse --show-toplevel` returns the **superproject**. Edits are logged there,
-with a submodule-prefixed path:
+Deriving a single root from the hook's working directory satisfied neither.
 
-```
-/Users/roficas/Projects/devs-with-genai/.kiro-attribution.json
-  → { "file": "kiro-metrics-demo/README.md", ... }
-```
-
-`pre-commit` runs from the repository being committed. Inside the submodule, the same
-`git rev-parse --show-toplevel` returns the **submodule**, so it looks for a tracking
-file that does not exist, and the staged paths it compares against have no prefix:
+`log-ai-edit.sh` resolved `git rev-parse --show-toplevel` from Kiro's working directory —
+the superproject. So an edit to the submodule's README was written as:
 
 ```
-looks for: kiro-metrics-demo/.kiro-attribution.json   (absent)
-staged as: README.md                                   (not kiro-metrics-demo/README.md)
+devs-with-genai/.kiro-attribution.json
+  → { "file": "kiro-metrics-demo/README.md" }
 ```
 
-Two independent failures, either of which is sufficient to lose the data: wrong file
-location, and a prefix mismatch on an exact string comparison.
+while the submodule's `pre-commit` looked for `kiro-metrics-demo/.kiro-attribution.json`
+(absent) and compared against `README.md`. Wrong file, wrong path.
+
+Sibling checkouts failed harder. An absolute path outside the workspace root hit an
+explicit "outside the repo" guard and was discarded, so a multi-root workspace lost
+attribution for every repository but the first.
 
 ### Observed impact
 
-Commit `6163e6f` in this repository contains agent-authored hook fixes and carries no
-attribution at all. A subsequent dry run over 423 lines of agent-written HTML formatter
-work produced:
+Commit `6163e6f` carries agent-authored hook fixes and no attribution. A dry run over 423
+lines of agent-written HTML formatter work reported:
 
 ```json
 {"attribution_state": "unknown", "ai_lines": 0, "human_lines": 0, "total_lines": 0}
 ```
 
-`unknown` is the correct and honest output given the inputs — the capture-verification
-logic is working as designed, refusing to assert `human-only` when it cannot tell. But
-the underlying data was available the whole time, one directory up. No agent work
-committed from inside a submodule can currently be attributed.
+`unknown` was the honest output for the inputs available, but the data existed one
+directory up the whole time.
+
+Worse, a commit with no trailers at all is not recorded as human either. The engine needs
+both `aiLines` and `humanLines` defined before counting a commit, so such commits
+contribute `0/0`. In this repository **15 of 22 counted commits** contributed nothing to
+the authorship denominator. A single hand-edited README line was invisible rather than
+counted as human work.
 
 ## Decision
 
-Teach `pre-commit` to look up into the superproject and normalise the prefix.
-
-Git exposes the relationship directly:
+Resolve the owning repository **per edited file**, in `log-ai-edit.sh`, and write into
+that repository's log using a path relative to it.
 
 ```bash
-SUPER=$(git rev-parse --show-superproject-working-tree)   # empty unless in a submodule
+OWNING_ROOT="$(git -C "$LOOKUP_DIR" rev-parse --show-toplevel)"
+FILE_PATH="${ABS_PATH#"$OWNING_ROOT"/}"
+TRACKING_PATH="${OWNING_ROOT}/.kiro-attribution.json"
 ```
 
-Proposed logic, applied only when no local tracking file is found:
+`pre-commit` needs no change. It already reads its own repository's log and compares
+repo-relative paths; it was simply never given correct input.
 
-1. If `$SUPER` is empty, behave exactly as today. Non-submodule repositories are
-   unaffected.
-2. If `$SUPER` is set and `$SUPER/.kiro-attribution.json` exists, read the log from
-   there.
-3. Derive the submodule's path relative to the superproject, and prepend it to each
-   staged path before the comparison:
+Three details the implementation must get right:
 
-   ```bash
-   PREFIX=${PWD#"$SUPER"/}          # e.g. "kiro-metrics-demo"
-   LOOKUP="${PREFIX}/${file}"       # e.g. "kiro-metrics-demo/README.md"
-   ```
+1. **Non-existent files.** A create fires `PostToolUse` before the file exists, so the
+   lookup walks up to the nearest existing directory, accumulating the remainder to
+   rebuild the path afterwards.
+2. **Symlinked paths.** `rev-parse --show-toplevel` always reports the physical path. On
+   macOS `/var` is a symlink to `/private/var`, so comparing a logical incoming path
+   against it fails the prefix test and silently drops the edit. Canonicalise with
+   `pwd -P` first — not `realpath --relative-to`, which is a GNU-only flag absent on BSD.
+3. **Files in no repository.** Nothing will ever commit them, so exit without logging.
 
-4. Write the summary and the git note into the submodule, not the superproject. The
-   attribution belongs to the commit being made.
-
-`post-commit` must not reset the superproject's log when committing a submodule. The
-same edits may still be pending for a superproject commit, and clearing them early
-would recreate the silent-loss bug across the boundary. Reset only the log that was
-actually consumed, which means `post-commit` needs the same superproject awareness.
+Each repository owning its own log also fixes a latent hazard: `post-commit` resets the
+log it consumed. With one shared log, whichever repository committed first would discard
+edits still pending for the other.
 
 ## Consequences
 
 ### Positive
-- Agent work committed inside a submodule becomes attributable
-- Non-submodule repositories see no behaviour change; the lookup is a fallback
-- Uses a documented git primitive rather than inferring paths from string shapes
+- Agent work committed inside a submodule is attributable
+- Sibling and multi-root layouts work, where they previously lost data outright
+- Plain nested repositories work too, which the superproject approach could not handle:
+  `--show-superproject-working-tree` returns empty for anything not a registered submodule
+- Reset semantics become per-repository and therefore correct by construction
+- No change to `pre-commit`, `prepare-commit-msg` or `post-commit`
 
 ### Negative
-- `pre-commit` gains knowledge of superprojects, which is conceptual scope it did not
-  previously have
-- One tracking log now feeds two repositories, so reset timing becomes a correctness
-  concern rather than housekeeping
-- A single logical change spanning both repositories still requires two commits, and
-  each will attribute only its own files. The totals will not sum to the change.
+- One `git rev-parse` per edit. Negligible, but no longer zero.
+- A logical change spanning two repositories still needs two commits, each attributing
+  only its own files. The totals will not sum to the change.
+- Every participating repository must gitignore the two tracking files, not just the
+  workspace root.
 
 ### Risks
-- If both repositories are committed from the same pending log, whichever commits first
-  determines what the second one sees. Reset ordering needs test coverage, not just
-  reasoning.
-- `--show-superproject-working-tree` returns empty for a plain nested repository that is
-  not a registered submodule, so those remain unsupported. Acceptable: they are not a
-  supported layout for this tool either way.
+- Only the owning repository is consulted, so a file that is somehow tracked by two
+  repositories is attributed to the innermost. Acceptable: that is also the one that will
+  commit it.
+- Attribution remains file-level per ADR-001. A file touched by both a human and the
+  agent before a commit still counts entirely as AI.
 
 ## Alternatives Considered
 
-1. **Log to the nearest enclosing repository instead of the workspace root.** Would put
-   the file where `pre-commit` already looks, requiring no `pre-commit` change. Rejected
-   because `log-ai-edit.sh` would need to resolve the owning repository per edit, and a
-   single agent turn routinely touches both repositories — producing two logs with
-   split state and no clear reset point.
+1. **Teach `pre-commit` to read the superproject's log and strip the prefix.** The first
+   draft's decision, via `git rev-parse --show-superproject-working-tree`. Rejected on
+   implementation: it is more code, submodule-only, leaves the shared-log reset hazard in
+   place, and does nothing for sibling or nested layouts. The original draft dismissed
+   per-file resolution on the grounds that two logs meant "split state with no clear reset
+   point." That was backwards — two logs is precisely what makes the reset well-defined.
 
-2. **Match on basename or suffix rather than full path.** A one-line change. Rejected:
-   `README.md` exists in both repositories, and collapsing paths would attribute the
-   wrong file. Precision is the entire premise of ADR-001.
+2. **Restructure to sibling repositories and drop the submodule.** Tested before
+   deciding: the "outside the repo" guard discarded the edit entirely, producing no log at
+   all. Strictly worse than a prefix mismatch, where the data at least exists.
 
-3. **Accept the limitation and document it.** Viable while the submodule holds only
-   tooling. Rejected because the submodule holds the CLI itself, which is where most
-   agent work in this project actually lands — the metric would systematically
-   undercount its own source repository.
+3. **Match on basename or path suffix.** A one-line change. Rejected: `README.md` exists
+   in both repositories, so this attributes the wrong file. Precision is the premise of
+   ADR-001.
 
-4. **Stop using a submodule.** Removes the problem but loses the separately publishable
-   `roficas/kiro-metrics` repository, which is a product requirement.
+4. **Accept the limitation.** Rejected. The submodule holds the CLI itself, which is where
+   most agent work in this project lands, so the metric would systematically undercount
+   its own source repository.
 
-## Implementation Notes
+## Validation
 
-Test coverage should include, at minimum:
+Six scenarios, all passing:
 
-- a submodule commit where the log lives in the superproject, expecting correct
-  AI/human split rather than `unknown`
-- a non-submodule repository, expecting byte-identical behaviour to today
-- a superproject commit following a submodule commit, confirming pending edits for the
-  superproject survived the submodule's reset
-- a submodule with no superproject log, still expecting `unknown` rather than a
-  fabricated `human-only`
+| Scenario | Expected | Result |
+|---|---|---|
+| Edit in superproject, cwd superproject | `super/` log, `docs/doc.md` | pass |
+| Edit in submodule, cwd superproject | `sub/` log, `src/a.ts` | pass |
+| Edit in sibling repo, absolute path | `sibling/` log, `lib/b.ts` | pass |
+| New file, nested dirs absent | `src/brand/new/deep.ts` | pass |
+| File in no repository | no log written | pass |
+| End-to-end submodule commit | `ai-lines: 20`, `human-lines: 6` | pass |
+
+The last case is the one that matters: an agent-written file and a hand-written file
+staged together in a submodule now produce `ai-authorship: assisted` with a note naming
+`src/agent.ts` as AI and `README.md` as human. Previously the same commit produced
+`attribution_state: unknown`.

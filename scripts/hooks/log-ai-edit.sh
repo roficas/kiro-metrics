@@ -16,8 +16,9 @@
 set -euo pipefail
 
 TRACKING_FILE=".kiro-attribution.json"
-PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-TRACKING_PATH="${PROJECT_ROOT}/${TRACKING_FILE}"
+# Fallback only. The real root is resolved per edited file below, because the repository
+# that owns a file is not necessarily the one Kiro was launched in.
+CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
 # Read stdin (Kiro passes session context as JSON)
 INPUT=$(cat)
@@ -58,25 +59,64 @@ case "$FILE_PATH" in
     ;;
 esac
 
-# Make path relative to project root if absolute.
-# Done with pure bash prefix stripping rather than `realpath --relative-to`, which is a
-# GNU coreutils flag that BSD/macOS realpath doesn't support. The previous version failed
-# silently there and fell back to the absolute path, which never matches the repo-relative
-# paths git reports in pre-commit — so every AI edit was misfiled as human-authored.
-if [[ "$FILE_PATH" == /* ]]; then
-  case "$FILE_PATH" in
-    "$PROJECT_ROOT"/*)
-      FILE_PATH="${FILE_PATH#"$PROJECT_ROOT"/}"
-      ;;
-    *)
-      # Edit landed outside the repo — nothing meaningful to attribute.
-      exit 0
-      ;;
-  esac
+# --- Resolve the repository that owns this file ------------------------------------
+# An edit must be logged into the repository that will commit it, using a path relative
+# to that repository, because pre-commit compares against `git diff --cached --name-only`
+# with an exact string match.
+#
+# Deriving one root from Kiro's working directory does not satisfy that. In a submodule
+# layout the workspace root is the superproject, so an edit to kiro-metrics-demo/README.md
+# was logged as "kiro-metrics-demo/README.md" into the superproject's log, while the
+# submodule's pre-commit looked for its own log (absent) and compared against "README.md".
+# Neither the location nor the path matched, so agent work committed inside a submodule was
+# never attributed. Sibling checkouts were worse: an absolute path outside the workspace
+# root was dropped outright.
+#
+# `git -C <dir> rev-parse --show-toplevel` answers this directly and works for
+# superprojects, submodules, plain nested repositories and siblings alike.
+
+# Resolve to an absolute path first so the -C lookup has a real directory to start from.
+if [[ "$FILE_PATH" != /* ]]; then
+  ABS_PATH="${CWD_ROOT}/${FILE_PATH#./}"
+else
+  ABS_PATH="$FILE_PATH"
 fi
 
-# Normalise a leading ./ so paths match git's output exactly
-FILE_PATH="${FILE_PATH#./}"
+# The file may not exist yet for a create, so walk up to the nearest existing directory.
+LOOKUP_DIR="$(dirname "$ABS_PATH")"
+PATH_SUFFIX="$(basename "$ABS_PATH")"
+while [ ! -d "$LOOKUP_DIR" ] && [ "$LOOKUP_DIR" != "/" ]; do
+  PATH_SUFFIX="$(basename "$LOOKUP_DIR")/${PATH_SUFFIX}"
+  LOOKUP_DIR="$(dirname "$LOOKUP_DIR")"
+done
+
+# Canonicalise to the physical path before comparing against git's answer. On macOS /tmp
+# and /var are symlinks (/var -> /private/var), and `rev-parse --show-toplevel` always
+# reports the resolved path. Comparing a logical incoming path against it fails the prefix
+# test, and the edit is dropped — which is how a sibling-repository edit went missing even
+# though the repository was found. `pwd -P` resolves it without GNU-only realpath flags.
+LOOKUP_DIR="$(cd "$LOOKUP_DIR" 2>/dev/null && pwd -P || echo "$LOOKUP_DIR")"
+ABS_PATH="${LOOKUP_DIR}/${PATH_SUFFIX}"
+
+OWNING_ROOT="$(git -C "$LOOKUP_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -z "$OWNING_ROOT" ]; then
+  # Not inside any git repository, so nothing will ever commit it.
+  exit 0
+fi
+
+case "$ABS_PATH" in
+  "$OWNING_ROOT"/*)
+    FILE_PATH="${ABS_PATH#"$OWNING_ROOT"/}"
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+
+# Each repository keeps its own log, consumed by its own pre-commit and reset by its own
+# post-commit. A single shared log would be reset by whichever repository committed first,
+# discarding edits still pending for the other.
+TRACKING_PATH="${OWNING_ROOT}/${TRACKING_FILE}"
 
 # Initialize the tracking file if it is missing, empty, or not valid JSON.
 # Testing only `[ ! -f ]` is not enough: a 0-byte or corrupt file passes that check, then

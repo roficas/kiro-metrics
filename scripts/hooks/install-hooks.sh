@@ -5,7 +5,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-GIT_HOOKS_DIR="$(git rev-parse --show-toplevel)/.git/hooks"
+
+# `<toplevel>/.git/hooks` is wrong in a submodule or a linked worktree, where .git is a
+# FILE containing a gitdir pointer rather than a directory — installing there fails with
+# "Not a directory". --absolute-git-dir resolves the real location in every layout
+# (.git/modules/<name> for a submodule, .git/worktrees/<name> for a worktree).
+GIT_HOOKS_DIR="$(git rev-parse --absolute-git-dir)/hooks"
+mkdir -p "$GIT_HOOKS_DIR"
 
 # jq is a hard requirement — every hook script parses JSON with it. Without jq the
 # hooks fail open and attribution silently stops, so fail loudly here instead.
