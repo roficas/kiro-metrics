@@ -8,6 +8,13 @@
 #   4. Appends git trailers to the commit message (via prepare-commit-msg)
 #   5. Stores line-level attribution in git notes (via post-commit)
 #
+# Generated and vendored files are excluded from BOTH buckets rather than defaulting to
+# human. Nobody authors a lockfile, so counting npm's output as hand-written silently
+# inflates the human share and deflates the authorship rate — in this repo's own history a
+# single package-lock.json contributed 3745 of 3775 "human" lines, dragging one commit's
+# authorship rate from ~100% down to 43%. Excluded lines leave the denominator entirely and
+# are reported separately so the numbers stay auditable against the raw diff.
+#
 # Install: symlink or copy to .git/hooks/pre-commit
 #   ln -sf ../../scripts/hooks/pre-commit .git/hooks/pre-commit
 
@@ -17,15 +24,32 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 TRACKING_FILE="${REPO_ROOT}/.kiro-attribution.json"
 ATTRIBUTION_SUMMARY="${REPO_ROOT}/.kiro-attribution-staged.json"
 
+# Paths whose contents are produced by a tool rather than authored by anyone. Matched as
+# glob patterns against the repo-relative path git reports, so directory entries need the
+# `*` prefix to match at any depth.
+is_generated() {
+  case "$1" in
+    # Attribution tracking scratch files — counting these would let the tracker
+    # inflate its own human numbers.
+    .kiro-attribution.json|.kiro-attribution-staged.json|*/.kiro-attribution.json|*/.kiro-attribution-staged.json) return 0 ;;
+    # Dependency lock files
+    *package-lock.json|*npm-shrinkwrap.json|*yarn.lock|*pnpm-lock.yaml|*bun.lockb) return 0 ;;
+    *Cargo.lock|*poetry.lock|*Pipfile.lock|*uv.lock|*composer.lock|*Gemfile.lock|*go.sum) return 0 ;;
+    # Vendored dependencies and build output
+    node_modules/*|*/node_modules/*|vendor/*|*/vendor/*) return 0 ;;
+    dist/*|*/dist/*|build/*|*/build/*|out/*|*/out/*|target/*|*/target/*) return 0 ;;
+    .next/*|*/.next/*|coverage/*|*/coverage/*) return 0 ;;
+    # Minified bundles, source maps, and conventional codegen output
+    *.min.js|*.min.css|*.map) return 0 ;;
+    *.generated.*|*_pb2.py|*_pb2_grpc.py|*.pb.go|*.g.dart) return 0 ;;
+  esac
+  return 1
+}
+
 # Drop any summary left behind by an aborted or amended commit. Every exit path below
 # either writes a fresh summary or intentionally leaves none, so a stale file can never
 # leak wrong counts into prepare-commit-msg.
 rm -f "$ATTRIBUTION_SUMMARY"
-
-# If no tracking file exists, nothing to attribute — allow commit
-if [ ! -f "$TRACKING_FILE" ]; then
-  exit 0
-fi
 
 # Get list of staged files (added/modified only, no deletes)
 STAGED_FILES=$(git diff --cached --name-only --diff-filter=AM)
@@ -34,10 +58,51 @@ if [ -z "$STAGED_FILES" ]; then
   exit 0
 fi
 
+# --- Capture check --------------------------------------------------------------
+# An empty tracking log is ambiguous: either the agent edited nothing, or its edits
+# were never captured. Guessing "edited nothing" records agent work as human work,
+# so require positive proof that capture works in this session instead.
+#
+# The proof required is `captureVerified`, not `hooksAlive`. Liveness only means the
+# client ran a hook; it says nothing about whether the logger understood the payload.
+# Those failed separately once already (snake_case vs camelCase keys), and a live
+# hook over an empty log is exactly the false confidence that made that bug
+# invisible. captureVerified means a synthetic payload was pushed through
+# log-ai-edit.sh and an entry actually landed.
+#
+# A marker written before the probe existed has no captureVerified field, so it reads
+# as false and yields "unknown". That is intended: such a marker cannot distinguish
+# "no edits" from "capture broken", and unknown is the honest answer.
+CAPTURE_VERIFIED="false"
+if [ -f "$TRACKING_FILE" ]; then
+  CAPTURE_VERIFIED=$(jq -r '.session.captureVerified // false' "$TRACKING_FILE" 2>/dev/null || echo "false")
+fi
+
+# Any logged edit also counts as proof, since it means attribution was deliberately
+# recorded for this commit — including by hand in a client that cannot run hooks.
+LOGGED_EDITS=0
+if [ -f "$TRACKING_FILE" ]; then
+  LOGGED_EDITS=$(jq -r '.edits | length' "$TRACKING_FILE" 2>/dev/null || echo "0")
+fi
+
+if [ "$CAPTURE_VERIFIED" != "true" ] && [ "$LOGGED_EDITS" -eq 0 ]; then
+  # Record the uncertainty instead of asserting human-only.
+  jq -n '{attribution_state: "unknown", ai_lines: 0, human_lines: 0, total_lines: 0,
+          excluded_lines: 0, ai_files: [], human_files: [], excluded_files: []}' > "$ATTRIBUTION_SUMMARY"
+  echo "[attribution] WARNING: cannot determine AI attribution for this commit." >&2
+  echo "[attribution]   No verified edit capture and no logged edits, so agent edits" >&2
+  echo "[attribution]   are not being recorded in this client. This commit will be" >&2
+  echo "[attribution]   recorded as 'unknown' rather than silently claimed as" >&2
+  echo "[attribution]   human-authored. See README.md Troubleshooting." >&2
+  exit 0
+fi
+
 AI_LINES=0
 HUMAN_LINES=0
+EXCLUDED_LINES=0
 AI_FILES=()
 HUMAN_FILES=()
+EXCLUDED_FILES=()
 
 # For each staged file, check if it appears in the attribution tracking log
 while IFS= read -r file; do
@@ -45,6 +110,14 @@ while IFS= read -r file; do
   LINES_ADDED=$(git diff --cached --numstat "$file" 2>/dev/null | awk '{print $1}' || echo "0")
   if [ "$LINES_ADDED" = "-" ]; then
     LINES_ADDED=0
+  fi
+
+  # Tool-generated content belongs to neither author. Checked before the tracking-log
+  # lookup so a generated file is excluded even if an agent edit happened to touch it.
+  if is_generated "$file"; then
+    EXCLUDED_LINES=$((EXCLUDED_LINES + LINES_ADDED))
+    EXCLUDED_FILES+=("$file")
+    continue
   fi
 
   # Check if this file was edited by Kiro (appears in tracking file)
@@ -59,22 +132,30 @@ while IFS= read -r file; do
   fi
 done <<< "$STAGED_FILES"
 
+# Deliberately excludes EXCLUDED_LINES: this is the authorship-rate denominator, and
+# generated content must not dilute it.
 TOTAL_LINES=$((AI_LINES + HUMAN_LINES))
 
 # Write summary for prepare-commit-msg and post-commit to consume
 jq -n \
+  --arg attribution_state "measured" \
   --argjson ai_lines "$AI_LINES" \
   --argjson human_lines "$HUMAN_LINES" \
   --argjson total_lines "$TOTAL_LINES" \
+  --argjson excluded_lines "$EXCLUDED_LINES" \
   --argjson ai_files "$(if [ ${#AI_FILES[@]} -eq 0 ]; then echo '[]'; else printf '%s\n' "${AI_FILES[@]}" | jq -R . | jq -s .; fi)" \
   --argjson human_files "$(if [ ${#HUMAN_FILES[@]} -eq 0 ]; then echo '[]'; else printf '%s\n' "${HUMAN_FILES[@]}" | jq -R . | jq -s .; fi)" \
-  '{ai_lines: $ai_lines, human_lines: $human_lines, total_lines: $total_lines, ai_files: $ai_files, human_files: $human_files}' \
+  --argjson excluded_files "$(if [ ${#EXCLUDED_FILES[@]} -eq 0 ]; then echo '[]'; else printf '%s\n' "${EXCLUDED_FILES[@]}" | jq -R . | jq -s .; fi)" \
+  '{attribution_state: $attribution_state, ai_lines: $ai_lines, human_lines: $human_lines, total_lines: $total_lines, excluded_lines: $excluded_lines, ai_files: $ai_files, human_files: $human_files, excluded_files: $excluded_files}' \
   > "$ATTRIBUTION_SUMMARY"
 
 # Print summary to console
 if [ "$AI_LINES" -gt 0 ]; then
   PERCENT=$(( (AI_LINES * 100) / (TOTAL_LINES > 0 ? TOTAL_LINES : 1) ))
   echo "[attribution] AI-authored: ${AI_LINES}/${TOTAL_LINES} lines (${PERCENT}%) across ${#AI_FILES[@]} file(s)"
+fi
+if [ "$EXCLUDED_LINES" -gt 0 ]; then
+  echo "[attribution] Excluded ${EXCLUDED_LINES} generated line(s) in ${#EXCLUDED_FILES[@]} file(s) from both buckets"
 fi
 
 exit 0

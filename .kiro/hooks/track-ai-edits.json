@@ -2,6 +2,16 @@
   "version": "v1",
   "hooks": [
     {
+      "name": "Attribution Capture Probe",
+      "trigger": "SessionStart",
+      "description": "Verifies that agent edits can actually be captured in this session. Without it, pre-commit cannot tell 'no AI edits' apart from 'capture broken' and would report agent work as human-only.",
+      "action": {
+        "type": "command",
+        "command": "bash scripts/hooks/mark-session-start.sh"
+      },
+      "enabled": true
+    },
+    {
       "name": "Track AI File Edits",
       "trigger": "PostToolUse",
       "description": "Logs every agent file-write to .kiro-attribution.json for line-level AI code attribution tracking",

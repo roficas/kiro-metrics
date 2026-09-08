@@ -35,8 +35,15 @@ if [ "$AI_LINES" -gt 0 ]; then
   echo "[attribution] Recorded AI attribution note on ${COMMIT_SHA:0:8}"
 fi
 
-# Clear tracking files for the next cycle
-echo '{"edits":[]}' > "$TRACKING_FILE"
+# Clear the edit log for the next cycle, but PRESERVE the session marker.
+# Dropping it would make every commit after the first in a session look like capture
+# had broken, forcing them all to 'unknown'.
+if [ -f "$TRACKING_FILE" ] && jq -e . "$TRACKING_FILE" >/dev/null 2>&1; then
+  jq '{session: (.session // empty), edits: []}' "$TRACKING_FILE" > "${TRACKING_FILE}.tmp" \
+    && mv "${TRACKING_FILE}.tmp" "$TRACKING_FILE"
+else
+  echo '{"edits":[]}' > "$TRACKING_FILE"
+fi
 rm -f "$ATTRIBUTION_SUMMARY"
 
 exit 0

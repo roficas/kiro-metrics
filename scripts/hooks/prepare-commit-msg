@@ -21,6 +21,21 @@ if [ ! -f "$ATTRIBUTION_SUMMARY" ]; then
   exit 0
 fi
 
+STATE=$(jq -r '.attribution_state // "measured"' "$ATTRIBUTION_SUMMARY")
+
+# Attribution could not be determined (capture not working in this client).
+# Emit a distinct marker and deliberately omit ai-lines/human-lines, so parsers
+# exclude this commit from the authorship rate instead of counting every line as
+# human — which is what makes broken capture look like a productive human.
+if [ "$STATE" = "unknown" ]; then
+  {
+    echo ""
+    echo ""
+    echo "ai-attribution: unknown"
+  } >> "$COMMIT_MSG_FILE"
+  exit 0
+fi
+
 AI_LINES=$(jq -r '.ai_lines' "$ATTRIBUTION_SUMMARY")
 HUMAN_LINES=$(jq -r '.human_lines' "$ATTRIBUTION_SUMMARY")
 TOTAL_LINES=$(jq -r '.total_lines' "$ATTRIBUTION_SUMMARY")
