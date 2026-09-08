@@ -15,19 +15,20 @@ Two parts:
 
 ### Make your project trackable (write side)
 
-You need 5 files and one command. Nothing else changes in your project.
+You need 6 files and one command. Nothing else changes in your project.
 
 ```bash
-# 1. Copy the Kiro agent hook (tells Kiro to log its file edits)
+# 1. Copy the Kiro agent hooks (capture probe + edit logger)
 mkdir -p .kiro/hooks
 cp kiro-metrics-demo/.kiro/hooks/track-ai-edits.json  your-project/.kiro/hooks/
 
 # 2. Copy the hook scripts
 mkdir -p your-project/scripts/hooks
-cp scripts/hooks/log-ai-edit.sh       your-project/scripts/hooks/
-cp scripts/hooks/pre-commit           your-project/scripts/hooks/
-cp scripts/hooks/prepare-commit-msg   your-project/scripts/hooks/
-cp scripts/hooks/post-commit          your-project/scripts/hooks/
+cp scripts/hooks/log-ai-edit.sh        your-project/scripts/hooks/
+cp scripts/hooks/mark-session-start.sh your-project/scripts/hooks/
+cp scripts/hooks/pre-commit            your-project/scripts/hooks/
+cp scripts/hooks/prepare-commit-msg    your-project/scripts/hooks/
+cp scripts/hooks/post-commit           your-project/scripts/hooks/
 chmod +x your-project/scripts/hooks/*
 
 # 3. Install the git hooks (symlinks them into .git/hooks/)
@@ -71,8 +72,22 @@ human-lines: 12
 
 Example git note (stored in `refs/notes/ai-attribution`):
 ```json
-{"ai_lines":85,"human_lines":12,"total_lines":97,"ai_files":["src/validation.ts","src/types.ts"],"human_files":["README.md"]}
+{"attribution_state":"measured","ai_lines":85,"human_lines":12,"total_lines":97,"ai_files":["src/validation.ts","src/types.ts"],"human_files":["README.md"]}
 ```
+
+`ai-authorship` is `generated` (no human lines), `assisted` (both), or `human-only`.
+`ai-authored-by` is omitted for `human-only` commits.
+
+There is a fourth possibility. If attribution could not be determined, the commit gets a
+single different trailer instead, and no line counts:
+
+```
+ai-attribution: unknown
+```
+
+The omission is deliberate — it makes parsers exclude the commit from the authorship rate
+rather than counting every line as human. See
+[Verifying capture](#verifying-capture-before-you-trust-the-numbers).
 
 ### Read the metrics (read side)
 
@@ -122,6 +137,12 @@ npx tsx src/index.ts --repo owner/repo
 ## How the attribution tracking works
 
 ```
+At session start:
+  SessionStart hook fires
+    → mark-session-start.sh pushes a synthetic payload through log-ai-edit.sh
+    → confirms an entry actually landed, then removes it
+    → records {hooksAlive, captureVerified} in .kiro-attribution.json
+
 During Kiro session:
   Kiro edits a file
     → PostToolUse hook fires
@@ -130,7 +151,9 @@ During Kiro session:
 At commit time (git hooks):
   pre-commit
     → reads .kiro-attribution.json
-    → checks which staged files appear in the tracking log
+    → if capture was never verified and nothing was logged, stops here and
+      records attribution_state: unknown rather than guessing
+    → otherwise checks which staged files appear in the tracking log
     → counts AI lines vs human lines
     → writes .kiro-attribution-staged.json
 
@@ -152,20 +175,73 @@ Key points:
 - **No steering files required.** The hooks work purely by observing Kiro's tool calls.
 - **Graceful degradation.** If git notes are missing, the CLI falls back to trailer data.
 - **Works with any project.** Language-agnostic — tracks file edits regardless of what's in them.
+- **Missing data is reported, not guessed.** If capture is not working, commits are marked
+  `unknown` and excluded from the metrics rather than being reported as human-authored.
+
+### Verifying capture before you trust the numbers
+
+An empty `.kiro-attribution.json` is ambiguous: the agent may have edited nothing, or its
+edits may never have been captured. Reporting the first when the second is true is the most
+damaging way this tool can fail, because it records agent work as human work and it does so
+in the flattering direction, with no error anywhere.
+
+Two things must both hold, and they can fail independently:
+
+| Claim | Meaning | Proven by |
+|---|---|---|
+| `hooksAlive` | the client executes hooks at all | `SessionStart` running |
+| `captureVerified` | the logger understood the payload | a synthetic edit landing |
+
+Liveness alone is not enough. A live hook writing nothing looks exactly like a session with
+no AI edits — that is how the snake_case payload bug stayed invisible. `pre-commit` therefore
+gates on `captureVerified`.
+
+Check it any time:
+
+```bash
+jq -c '.session' .kiro-attribution.json
+```
+
+If `captureVerified` is `false` or absent, this client is not capturing. Either commit from a
+client that runs hooks, or record edits yourself, once per file:
+
+```bash
+printf '{"tool_name":"fs_write","tool_input":{"path":"src/thing.ts"}}' \
+  | bash scripts/hooks/log-ai-edit.sh
+```
+
+Manually logged edits satisfy the gate too. Paths must be repo-root-relative and match
+`git diff --cached --name-only` exactly, or `pre-commit` files them under `human_files`.
 
 ## Prerequisites
 
 - Node.js 20+ (for the CLI)
 - git
 - jq (for the hook scripts)
-- Kiro (for the PostToolUse hook to fire)
+- Kiro, in a client that runs `.kiro/hooks/` (the IDE does; ACP-based clients may not —
+  see [Verifying capture](#verifying-capture-before-you-trust-the-numbers))
 
 ## Troubleshooting
 
+### Trailers show `ai-attribution: unknown`
+
+Working as intended. It means capture could not be verified and nothing was logged, so the
+commit's authorship is genuinely not known. The commit is excluded from the metrics rather
+than being counted as human-authored.
+
+To fix the underlying cause, see
+[`.kiro-attribution.json` stays empty](#kiro-attributionjson-stays-empty-during-a-kiro-session).
+
+Note that commits made before this check existed carry `ai-authorship: human-only` from the
+old behaviour, and some of those may in fact have been agent-authored. There is no way to
+recover that retroactively.
+
 ### Trailers show `human-only` with `ai-lines: 0` and `human-lines: 0`
 
-Both counts being zero means `pre-commit` never found `.kiro-attribution.json` and fell through
-to its "no tracking file" path. Almost always a working-directory problem: the hooks resolve the
+Both counts being zero means `pre-commit` produced no line counts at all. A missing
+`.kiro-attribution.json` now yields `ai-attribution: unknown` instead, so if you are seeing
+`human-only` with two zeros you are either on an older version of the scripts or nothing was
+staged. Otherwise this is almost always a working-directory problem: the hooks resolve the
 tracking files from the repo root via `git rev-parse --show-toplevel`, so they work regardless of
 the CWD git invokes them from. If you copied older versions of the scripts that used bare relative
 paths (`TRACKING_FILE=".kiro-attribution.json"`), re-copy them from this repo.
@@ -202,9 +278,36 @@ last commit won't be attributed in the next one.
 
 ### `.kiro-attribution.json` stays empty during a Kiro session
 
-The `PostToolUse` hook isn't firing. Confirm `.kiro/hooks/track-ai-edits.json` exists, has
-`"enabled": true`, and that its `matcher` covers the write tools (`fs_write|str_replace|fs_append`).
-The hook only fires on agent edits — files you edit by hand are correctly counted as human lines.
+First separate "the hook never ran" from "the hook ran but captured nothing" — they look
+identical from the outside and have different fixes:
+
+```bash
+jq -c '.session' .kiro-attribution.json
+```
+
+- **No `session` key.** The `SessionStart` hook did not run, so the client is probably not
+  loading `.kiro/hooks/` at all. Hooks are registered by the client, not by this repo — the
+  Kiro IDE runs them; some other clients (ACP-based ones, for example) do not. Confirm the
+  hooks appear in the IDE's Agent Hooks panel. Then isolate script from wiring:
+
+  ```bash
+  bash scripts/hooks/mark-session-start.sh && jq -c '.session' .kiro-attribution.json
+  ```
+
+  If that populates the marker, the scripts are fine and the client is not running them.
+
+- **`captureVerified: false`.** Hooks run, but `log-ai-edit.sh` could not find a file path in
+  the payload. This means the payload shape differs from what the script expects. Check what
+  your client actually sends and compare against the extraction in `log-ai-edit.sh`; it
+  accepts both `tool_name`/`tool_input` and `toolName`/`toolInput`, and reads `path`,
+  `destinationPath`, then `targetFile`. The script warns on stderr when it hits this.
+
+Also confirm `.kiro/hooks/track-ai-edits.json` exists, has `"enabled": true`, and that its
+`matcher` covers the write tools your agent uses
+(`fs_write|str_replace|fs_append|smart_relocate|semantic_rename`).
+
+The hooks only fire on agent edits — files you edit by hand are correctly counted as human
+lines.
 
 ### Working tree goes dirty immediately after every commit
 
