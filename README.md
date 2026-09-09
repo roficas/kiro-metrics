@@ -12,6 +12,33 @@ Two parts:
 2. **The contract** — CI (GitHub Actions *or* GitLab CI) rebuilds a standard artifact, `metrics/attribution-log.jsonl`, and commits it to the repo. This is the boundary between the two sides.
 3. **Read side** — a CLI that reads that artifact and computes metrics. It never talks to a git-host API and never touches git, so GitHub, GitLab, and self-hosted GitLab all work identically.
 
+## What gets captured (in plain terms)
+
+For every commit, the tool records **who wrote the lines** — the AI agent or a human — and how many of each. It does this by watching which files the agent edits during a Kiro session, then stamping the counts onto the commit. Nothing about your source code is read or stored; only line counts and file names.
+
+Two headline numbers come out of this:
+
+- **Involvement rate** — of all commits, what share had *any* AI help. Answers "how often is AI in the loop?"
+- **Authorship rate** — of all lines written, what share the AI wrote. Answers "how much of the code is AI's?"
+
+### How common scenarios show up
+
+| Scenario | Commit is tagged | Involvement | Authorship |
+|---|---|---|---|
+| Agent writes a whole file, you commit it as-is | `generated` | counts as AI-involved | 100% AI for those lines |
+| Agent drafts code, you hand-edit some lines, then commit | `assisted` | counts as AI-involved | split — e.g. 70% AI / 30% human |
+| You write everything yourself, no agent | `human-only` | not AI-involved | 0% AI for those lines |
+| A CI bot commits (e.g. the attribution log update) | detected as bot | **excluded** from both rates | excluded |
+| Agent edited files but capture couldn't be verified | `unknown` | **excluded** (not counted as human) | excluded |
+
+The last two rows are the important ones for trust: **bot commits and unverifiable commits are left out of the rates entirely**, rather than being silently miscounted as human work. That keeps the numbers honest — the tool would rather report "don't know" than inflate the human share.
+
+### What is *not* captured
+
+- Your actual source code — only line counts and file paths.
+- Files you edit by hand outside a Kiro session — correctly counted as human.
+- Generated files (lockfiles, build output) — excluded so they don't dilute the rate.
+
 ## Quick start
 
 ### Make your project trackable (write side)
