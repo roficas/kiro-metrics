@@ -1,0 +1,1 @@
+{"attribution_state":"measured","ai_lines":8,"human_lines":24,"total_lines":32,"excluded_lines":0,"ai_files":[".githooks/prepare-commit-msg"],"human_files":[".githooks/commit-msg",".githooks/post-commit",".githooks/pre-commit"],"excluded_files":[]}
