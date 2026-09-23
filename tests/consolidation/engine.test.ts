@@ -289,6 +289,27 @@ describe("exclusions", () => {
     expect(r.summary.totalCommits).toBe(1);
   });
 
+  it("detects a CI identity by name alone, since the log omits email by default", () => {
+    const named = (sha: string, author: string): CommitData => ({
+      sha,
+      author,
+      date: "2026-08-05T13:00:00Z",
+      message: "chore: bump",
+      trailers: { aiLines: 0, humanLines: 0 },
+    });
+    const r = computeMetrics([
+      human("a"),
+      named("b", "dependabot"),
+      named("c", "renovate-bot"),
+      named("d", "github-actions"),
+    ]);
+    expect(r.summary.excluded.botCommits).toBe(3);
+    expect(r.summary.totalCommits).toBe(1);
+  });
+  it("does not flag a human whose name merely contains a CI word", () => {
+    const r = computeMetrics([human("a"), human("b", "Renovated Kitchen Co")]);
+    expect(r.summary.excluded.botCommits).toBe(0);
+  });
   it("counts bot commits when includeBots is set", () => {
     const r = computeMetrics(
       [human("a"), bot("b", "github-actions[bot]", "gh@example.com")],

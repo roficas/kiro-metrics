@@ -5,13 +5,15 @@
 import type { DeveloperReport } from "../developer.js";
 import type { TeamReport } from "../team.js";
 import type { BoardReport } from "../board.js";
+import { escapeMarkdown as esc } from "./sanitize.js";
 
 export function formatDeveloperMarkdown(report: DeveloperReport): string {
   const lines: string[] = [];
 
   lines.push(`# AI Attribution Report — Developer View`);
   lines.push("");
-  lines.push(`**Author:** ${report.author} (${report.email})`);
+  const email = report.email ? ` (${esc(report.email)})` : "";
+  lines.push(`**Author:** ${esc(report.author)}${email}`);
   lines.push(
     `**Period:** ${report.period.since.slice(0, 10)} to ${report.period.until.slice(0, 10)}`
   );
@@ -35,7 +37,7 @@ export function formatDeveloperMarkdown(report: DeveloperReport): string {
     lines.push("| File | AI Authorship |");
     lines.push("|---|---|");
     for (const file of report.topAiFiles.slice(0, 10)) {
-      lines.push(`| ${file.file} | ${file.authorshipRate}% |`);
+      lines.push(`| ${esc(file.file)} | ${file.authorshipRate}% |`);
     }
   }
 
@@ -78,7 +80,7 @@ export function formatTeamMarkdown(report: TeamReport): string {
     lines.push("|---|---|---|---|");
     for (const author of report.byAuthor) {
       lines.push(
-        `| ${author.author} | ${author.involvementRate}% | ${author.authorshipRate}% | ${author.commits} |`
+        `| ${esc(author.author)} | ${author.involvementRate}% | ${author.authorshipRate}% | ${author.commits} |`
       );
     }
   }

@@ -39,7 +39,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout with full history
-        uses: actions/checkout@v4
+        # Pinned to a commit rather than a mutable tag: this job holds contents: write, so a
+        # compromised tag would be able to push to main. Update the SHA deliberately.
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           # The rebuild walks every commit; a shallow clone would silently truncate the log.
           fetch-depth: 0

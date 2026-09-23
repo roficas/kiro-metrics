@@ -28,3 +28,6 @@ coverage/
 
 # Generated reports (kiro-metrics --out). Disposable; attribution-log.jsonl is not.
 metrics/reports/
+# Local core.hooksPath chaining directory (machine-specific wrappers around scripts/hooks/).
+# The portable hooks live in scripts/hooks/ and are installed by scripts/hooks/install-hooks.sh.
+.githooks/

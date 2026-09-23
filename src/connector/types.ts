@@ -2,7 +2,12 @@
 export interface CommitData {
   sha: string;
   author: string;
-  authorEmail: string;
+  /**
+   * Absent by default. The attribution log is a committed, easily scraped artifact and
+   * reports get forwarded, so the backfill only records emails when explicitly asked
+   * (--with-email). Everything downstream must work without it.
+   */
+  authorEmail?: string;
   date: string; // ISO 8601
   message: string;
   trailers: {
@@ -40,7 +45,7 @@ export interface CommitData {
 export interface ConnectorOptions {
   since?: string; // ISO date or relative (e.g. "30d")
   until?: string; // ISO date
-  author?: string; // filter by name or email
+  author?: string; // filter by name (or email, when the log records it)
 }
 
 /** Common interface all connectors implement. */

@@ -74,6 +74,14 @@ describe("parseLogEntry", () => {
     expect(commit!.trailers.humanLines).toBe(100);
   });
 
+  it("leaves authorEmail undefined when the log omits email (the default)", () => {
+    const withoutEmail: Record<string, unknown> = { ...valid };
+    delete withoutEmail["email"];
+    const commit = parseLogEntry(withoutEmail, 1);
+    expect(commit!.authorEmail).toBeUndefined();
+    expect(parseLogEntry({ ...valid, email: "" }, 1)!.authorEmail).toBeUndefined();
+    expect(parseLogEntry({ ...valid, email: null }, 1)!.authorEmail).toBeUndefined();
+  });
   it("captures ai_attribution: unknown", () => {
     const commit = parseLogEntry(
       { ...valid, trailers: { ...valid.trailers, ai_attribution: "unknown" } },
@@ -213,8 +221,59 @@ describe("AttributionLogSource — local", () => {
     expect(commits[0]!.notes).toBeUndefined();
   });
 
+  it("filters by author name when the log carries no email", async () => {
+    writeLog([
+      entry({ author: "Alice", email: undefined }),
+      entry({ author: "Bob", email: undefined }),
+    ]);
+    const src = new AttributionLogSource(dir);
+    const commits = await src.fetchCommits({ author: "alice" });
+    expect(commits).toHaveLength(1);
+    expect(commits[0]!.author).toBe("Alice");
+    expect(commits[0]!.authorEmail).toBeUndefined();
+  });
   it("throws a clear error when the log is missing", async () => {
     const src = new AttributionLogSource(dir); // no log written
     await expect(src.fetchCommits({})).rejects.toThrow(/Attribution log not found/);
+  });
+});
+describe("AttributionLogSource (remote)", () => {
+  const fetchSpy = vi.fn();
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchSpy);
+    fetchSpy.mockReset();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env["METRICS_TOKEN"];
+  });
+  it("refuses to send METRICS_TOKEN over plain http", async () => {
+    process.env["METRICS_TOKEN"] = "secret";
+    const src = new AttributionLogSource("http://example.com/metrics/attribution-log.jsonl");
+    await expect(src.fetchCommits({})).rejects.toThrow(/insecure connection/);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+  it("sends the token as a Bearer header over https, with a timeout", async () => {
+    process.env["METRICS_TOKEN"] = "secret";
+    fetchSpy.mockResolvedValue(new Response("", { status: 200 }));
+    const src = new AttributionLogSource("https://example.com/metrics/attribution-log.jsonl");
+    await src.fetchCommits({});
+    const [, init] = fetchSpy.mock.calls[0]!;
+    expect(init.headers["Authorization"]).toBe("Bearer secret");
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+  it("sends no Authorization header when no token is set", async () => {
+    fetchSpy.mockResolvedValue(new Response("", { status: 200 }));
+    const src = new AttributionLogSource("http://example.com/metrics/attribution-log.jsonl");
+    await src.fetchCommits({});
+    const [, init] = fetchSpy.mock.calls[0]!;
+    expect(init.headers["Authorization"]).toBeUndefined();
+  });
+  it("rejects a body larger than the size cap", async () => {
+    fetchSpy.mockResolvedValue(
+      new Response("x", { status: 200, headers: { "content-length": String(60 * 1024 * 1024) } })
+    );
+    const src = new AttributionLogSource("https://example.com/metrics/attribution-log.jsonl");
+    await expect(src.fetchCommits({})).rejects.toThrow(/above the .* limit/);
   });
 });

@@ -17,11 +17,16 @@ import type { CommitData, CommitSource, ConnectorOptions } from "./types.js";
 /** Conventional location of the contract artifact within a repo. */
 export const LOG_RELATIVE_PATH = "metrics/attribution-log.jsonl";
 
+/** Remote fetch guardrails. The log is a few hundred bytes per commit; these are generous. */
+const FETCH_TIMEOUT_MS = 30_000;
+const MAX_LOG_BYTES = 50 * 1024 * 1024;
+
 /** One line of the contract. Mirrors what backfill-attribution-log.sh emits. */
 interface AttributionLogEntry {
   sha: string;
   author: string;
-  email: string;
+  /** Only present when the log was generated with --with-email. */
+  email?: string | null;
   date: string;
   message: string;
   trailers: {
@@ -105,7 +110,8 @@ export function parseLogEntry(raw: unknown, lineNumber: number): CommitData | nu
   return {
     sha: entry.sha,
     author: typeof entry.author === "string" ? entry.author : "unknown",
-    authorEmail: typeof entry.email === "string" ? entry.email : "",
+    authorEmail:
+      typeof entry.email === "string" && entry.email.length > 0 ? entry.email : undefined,
     date: entry.date,
     message: typeof entry.message === "string" ? entry.message : "",
     trailers: {
@@ -167,7 +173,7 @@ export class AttributionLogSource implements CommitSource {
         const needle = options.author.toLowerCase();
         const matches =
           commit.author.toLowerCase().includes(needle) ||
-          commit.authorEmail.toLowerCase().includes(needle);
+          (commit.authorEmail?.toLowerCase().includes(needle) ?? false);
         if (!matches) return;
       }
 
@@ -203,14 +209,26 @@ export class AttributionLogSource implements CommitSource {
     const headers: Record<string, string> = {};
 
     // Optional auth for private repos. Host-agnostic: whatever token the user exports.
+    // The token is only ever sent over HTTPS. A typo'd http:// URL must fail loudly rather
+    // than put a repository credential on the wire in cleartext. (Cross-origin redirects
+    // are already covered: fetch strips Authorization when the origin changes.)
     const token = process.env["METRICS_TOKEN"];
     if (token) {
+      if (!/^https:\/\//i.test(url)) {
+        throw new Error(
+          `Refusing to send METRICS_TOKEN over an insecure connection: ${url}\n` +
+            "  Use an https:// URL, or unset METRICS_TOKEN for a public repository."
+        );
+      }
       headers["Authorization"] = `Bearer ${token}`;
     }
 
     let response: Response;
     try {
-      response = await fetch(url, { headers });
+      response = await fetch(url, {
+        headers,
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       throw new Error(`Failed to fetch attribution log from ${url}: ${detail}`);
@@ -232,8 +250,27 @@ export class AttributionLogSource implements CommitSource {
       throw new Error(`Failed to fetch ${url}: HTTP ${response.status} ${response.statusText}`);
     }
 
-    return response.text();
+    // Cap the body so a misconfigured or hostile URL cannot exhaust memory. The declared
+    // length is checked first (cheap), then the actual bytes, since Content-Length is
+    // optional and unauthenticated.
+    const declared = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declared) && declared > MAX_LOG_BYTES) {
+      throw new Error(tooLargeMessage(url, declared));
+    }
+    const body = await response.text();
+    const actual = Buffer.byteLength(body, "utf-8");
+    if (actual > MAX_LOG_BYTES) {
+      throw new Error(tooLargeMessage(url, actual));
+    }
+    return body;
   }
+}
+
+function tooLargeMessage(url: string, bytes: number): string {
+  return (
+    `Attribution log at ${url} is ${bytes} bytes, above the ${MAX_LOG_BYTES}-byte limit.\n` +
+    "  Point --repo at a local checkout instead, which has no size limit."
+  );
 }
 
 function validAuthorship(

@@ -16,6 +16,28 @@ COMMIT_MSG_FILE="$1"
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 ATTRIBUTION_SUMMARY="${REPO_ROOT}/.kiro-attribution-staged.json"
 
+# Remove any attribution trailers already present in the message, then trim the
+# trailing blank lines they left behind.
+#
+# This hook can legitimately run more than once against the same message file —
+# on `git commit --amend`, on a commit retried after a failed hook, or when an
+# IDE/client re-invokes it — and without this the trailer block gets appended
+# again, producing a duplicated block. Call it immediately before appending, and
+# never on a path that exits without appending, so an amend that has no fresh
+# attribution summary keeps the trailers it already had.
+strip_attribution_trailers() {
+  local file="$1" tmp
+  tmp="$(mktemp)"
+  grep -v -E '^(ai-authored-by|ai-authorship|ai-lines|human-lines|ai-attribution):' \
+    "$file" > "$tmp" || true
+  # Drop trailing blank lines so the re-appended block keeps its original spacing.
+  awk '{ lines[NR] = $0 }
+       END { last = NR
+             while (last > 0 && lines[last] ~ /^[[:space:]]*$/) last--
+             for (i = 1; i <= last; i++) print lines[i] }' "$tmp" > "$file"
+  rm -f "$tmp"
+}
+
 # If no attribution summary, nothing to add
 if [ ! -f "$ATTRIBUTION_SUMMARY" ]; then
   exit 0
@@ -28,6 +50,7 @@ STATE=$(jq -r '.attribution_state // "measured"' "$ATTRIBUTION_SUMMARY")
 # exclude this commit from the authorship rate instead of counting every line as
 # human — which is what makes broken capture look like a productive human.
 if [ "$STATE" = "unknown" ]; then
+  strip_attribution_trailers "$COMMIT_MSG_FILE"
   {
     echo ""
     echo ""
@@ -55,6 +78,7 @@ else
 fi
 
 # Append trailers (git recognizes lines matching "key: value" at end of message)
+strip_attribution_trailers "$COMMIT_MSG_FILE"
 {
   echo ""
   echo ""

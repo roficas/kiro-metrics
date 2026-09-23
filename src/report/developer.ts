@@ -6,7 +6,8 @@ import type { MetricsResult } from "../consolidation/types.js";
 
 export interface DeveloperReport {
   author: string;
-  email: string;
+  /** Only when the log records emails (--with-email). */
+  email?: string;
   period: { since: string; until: string };
   commits: { total: number; aiInvolved: number; involvementRate: number };
   lines: { ai: number; human: number; total: number; authorshipRate: number };
@@ -23,14 +24,13 @@ export function buildDeveloperReport(
     ? metrics.byAuthor.find(
         (a) =>
           a.author.toLowerCase() === author.toLowerCase() ||
-          a.email.toLowerCase() === author.toLowerCase()
+          a.email?.toLowerCase() === author.toLowerCase()
       )
     : metrics.byAuthor[0]; // default to top contributor
 
   if (!authorData) {
     return {
       author: author ?? "unknown",
-      email: "",
       period: metrics.period,
       commits: { total: 0, aiInvolved: 0, involvementRate: 0 },
       lines: { ai: 0, human: 0, total: 0, authorshipRate: 0 },

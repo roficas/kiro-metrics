@@ -1,8 +1,0 @@
-#!/usr/bin/env bash
-# Chains git-defender (system) then this repo's attribution hook.
-set -e
-DEF="/usr/local/amazon/var/git-defender/hooks/post-commit"
-[ -x "$DEF" ] && "$DEF" "$@"
-OWN="$(git rev-parse --show-toplevel)/scripts/hooks/post-commit"
-[ -x "$OWN" ] && "$OWN" "$@"
-exit 0

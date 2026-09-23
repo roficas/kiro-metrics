@@ -142,10 +142,14 @@ npx tsx src/index.ts --repo /path/to/your-project --format html > attribution-re
 npx tsx src/index.ts --repo https://raw.githubusercontent.com/owner/repo/main/metrics/attribution-log.jsonl
 npx tsx src/index.ts --repo https://gitlab.aws.dev/group/proj/-/raw/main/metrics/attribution-log.jsonl
 
-# Private repo? Export a token (host-agnostic, sent as a Bearer header)
+# Private repo? Export a token (host-agnostic, sent as a Bearer header — https only)
 export METRICS_TOKEN=<token>
 npx tsx src/index.ts --repo https://gitlab.aws.dev/group/proj/-/raw/main/metrics/attribution-log.jsonl
 ```
+
+Give `METRICS_TOKEN` read-only scope (`read_repository` on GitLab, `contents: read` on
+GitHub) and an expiry. The CLI refuses to send it over plain `http://`, times out after 30s,
+and rejects logs above 50 MB.
 
 ## CLI flags
 
@@ -370,7 +374,6 @@ same code and no host-specific configuration.
 {
   "sha": "abc123",
   "author": "Roger",
-  "email": "roger@example.com",
   "date": "2026-08-04T15:20:54-04:00",
   "message": "feat: add metrics reader pipeline",
   "trailers": {
@@ -391,6 +394,12 @@ same code and no host-specific configuration.
 just without the file-level breakdown). A malformed line is skipped with a warning rather
 than aborting the report.
 
+The log carries **no email addresses by default**. It is committed to the repository and
+reports built from it get forwarded, so it should not spread personal data further than git
+history already does. Pass `--with-email` to the generator if you need it (an optional
+`"email"` key is then added); `--author` will match on it and bot detection will use it.
+Without it, `--author` matches on name only.
+
 ### Generating the log
 
 The single generator, `scripts/backfill-attribution-log.sh`, rebuilds the log from full
@@ -400,7 +409,8 @@ and local runs cannot drift.
 
 Run it locally any time:
 ```bash
-./scripts/backfill-attribution-log.sh
+./scripts/backfill-attribution-log.sh               # default: no email addresses
+./scripts/backfill-attribution-log.sh --with-email  # opt in to recording author emails
 ```
 
 ### Automating it with CI (pick your host)
@@ -411,8 +421,15 @@ Both templates call the shared script and emit the identical contract.
 workflow from a push made with the default token, so no loop guard is needed.
 
 **GitLab (incl. gitlab.aws.dev)** — copy `.gitlab-ci.yml`. It needs an `ATTRIBUTION_PUSH_TOKEN`
-CI/CD variable (a project access token with `write_repository`), because `CI_JOB_TOKEN`
-cannot push to its own repo. Loop prevention is built in (`[skip ci]`, `--push-option=ci.skip`,
+CI/CD variable because `CI_JOB_TOKEN` cannot push to its own repo. Create it with the least
+access that works and treat it as a secret:
+
+- a **project** access token (not personal), role **Developer**, scope **`write_repository`** only, with an expiry
+- stored as a CI/CD variable marked **Masked** and **Protected**, so it never appears in job logs and is only exposed to protected branches
+- if your default branch is protected, allow that token's role to push to it (Settings > Repository > Protected branches)
+
+The job passes the token through a git credential helper, never in a URL, so a failed push
+cannot echo it into the log. Loop prevention is built in (`[skip ci]`, `--push-option=ci.skip`,
 and a `workflow:` rule). If the token is absent the job still runs and reports what it would
 change, but never fails the pipeline — attribution is observability, not a merge gate.
 
@@ -427,7 +444,7 @@ git push origin refs/notes/ai-attribution
 - a **local path** — a repo directory (looks for `metrics/attribution-log.jsonl` inside it) or a direct path to the file
 - a **raw URL** — the file served by any host (GitHub raw, GitLab raw, gitlab.aws.dev raw)
 
-For a private repo, export `METRICS_TOKEN` and it's sent as a `Bearer` header.
+For a private repo, export `METRICS_TOKEN` and it's sent as a `Bearer` header over `https://` only.
 
 ### Pushing git notes
 

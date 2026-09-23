@@ -13,24 +13,30 @@
 # backfilled and incrementally-appended entries.
 #
 # Usage:
-#   ./scripts/backfill-attribution-log.sh [--repo PATH] [--output FILE] [--dry-run]
+#   ./scripts/backfill-attribution-log.sh [--repo PATH] [--output FILE] [--dry-run] [--with-email]
 #
 #   --repo PATH     Repository to read history from (default: current repo)
 #   --output FILE   Where to write (default: <repo>/metrics/attribution-log.jsonl)
 #   --dry-run       Print to stdout and a summary to stderr; write nothing
+#   --with-email    Record each author's email. Off by default: the log is committed to
+#                   the repository and reports get forwarded, so it should not carry
+#                   personal data unless you have decided it needs to. Without it,
+#                   --author matches on name only and bot detection relies on the name.
 
 set -euo pipefail
 
 REPO=""
 OUTPUT=""
 DRY_RUN=false
+WITH_EMAIL=false
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --repo)    REPO="${2:?--repo needs a path}"; shift 2 ;;
-    --output)  OUTPUT="${2:?--output needs a path}"; shift 2 ;;
-    --dry-run) DRY_RUN=true; shift ;;
-    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+    --repo)       REPO="${2:?--repo needs a path}"; shift 2 ;;
+    --output)     OUTPUT="${2:?--output needs a path}"; shift 2 ;;
+    --dry-run)    DRY_RUN=true; shift ;;
+    --with-email) WITH_EMAIL=true; shift ;;
+    -h|--help)    sed -n '2,26p' "$0"; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -80,7 +86,10 @@ while read -r SHA; do
   TOTAL=$((TOTAL + 1))
 
   AUTHOR=$(git log -1 --format='%an' "$SHA")
-  EMAIL=$(git log -1 --format='%ae' "$SHA")
+  EMAIL=""
+  if [ "$WITH_EMAIL" = true ]; then
+    EMAIL=$(git log -1 --format='%ae' "$SHA")
+  fi
   DATE=$(git log -1 --format='%aI' "$SHA")
   MESSAGE=$(git log -1 --format='%s' "$SHA")
   FULL_MSG=$(git log -1 --format='%B' "$SHA")
@@ -127,7 +136,6 @@ while read -r SHA; do
     '{
       sha: $sha,
       author: $author,
-      email: $email,
       date: $date,
       message: $message,
       trailers: {
@@ -138,7 +146,9 @@ while read -r SHA; do
         human_lines: $human_lines
       },
       notes: $notes
-    }' >> "$TMP"
+    }
+    # Emitted only on request; an absent key (not null) is the privacy-preserving default.
+    | if $email == "" then . else . + {email: $email} end' >> "$TMP"
 done < <(git log --format='%H' --reverse)
 
 {

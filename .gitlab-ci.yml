@@ -1,0 +1,125 @@
+# GitLab CI equivalent of .github/workflows/attribution-log.yml.
+#
+# Keeps metrics/attribution-log.jsonl current on the default branch so the CLI can read
+# attribution from a raw URL. GitLab ignores .github/workflows/ entirely, so a repository
+# hosted on GitLab (including self-hosted instances) needs this file instead.
+#
+# Like the GitHub workflow, this job calls scripts/backfill-attribution-log.sh — the same
+# script used locally. One implementation means CI and local runs cannot drift, and
+# because the script rebuilds
+# the log from full history rather than appending incrementally, it is idempotent and
+# self-healing: entries written before refs/notes/ai-attribution was pushed pick up
+# their file-level data on the next run instead of keeping notes: null forever.
+#
+# ── Required setup ────────────────────────────────────────────────────────────────
+# CI_JOB_TOKEN cannot push to its own repository (gitlab-org/gitlab#389060), so this
+# job needs a token supplied as a CI/CD variable:
+#
+#   1. Settings > Access tokens > Add new token (a PROJECT token, not a personal one)
+#        role: Developer, scope: write_repository ONLY, with an expiry date
+#   2. Settings > CI/CD > Variables > Add variable
+#        key: ATTRIBUTION_PUSH_TOKEN, value: <the token>
+#        Masked: YES (so GitLab redacts it from job logs)
+#        Protected: YES (so only protected-branch pipelines can read it)
+#   3. If the default branch is protected, allow the Developer role to push to it
+#      (Settings > Repository > Protected branches), or the push below is rejected.
+#
+# The token is handed to git through a credential helper, never embedded in a URL: a URL
+# with credentials would be printed verbatim by git on any push error and end up in the
+# job log. Masking is defence in depth, not the primary control.
+#
+# Without that variable the job still runs and reports what it would change, but does
+# not push. It never fails the pipeline for a missing token — attribution is
+# observability, and it should not be able to block a merge.
+#
+# ── Loop prevention ───────────────────────────────────────────────────────────────
+# GitHub Actions will not retrigger a workflow from a push made with the default
+# token, so its equivalent workflow gets loop protection for free. GitLab has no such
+# behaviour with a project access token, so a naive push here would trigger a
+# pipeline, which commits, which triggers a pipeline. Three independent guards:
+#   1. `[skip ci]` in the commit message  — GitLab declines to create the pipeline
+#   2. `--push-option=ci.skip`            — belt and braces at the transport level
+#   3. the workflow: rules below          — refuses to run on such a commit at all
+
+stages:
+  - metrics
+
+workflow:
+  rules:
+    # Never react to our own bot commit, even if both skip mechanisms above fail.
+    - if: '$CI_COMMIT_MESSAGE =~ /chore\(metrics\): update attribution log/'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+
+update-attribution-log:
+  stage: metrics
+  image: alpine:3.20
+  # The backfill walks every commit, so a shallow clone would silently truncate the
+  # log to whatever depth the runner defaulted to. 0 means full history.
+  variables:
+    GIT_DEPTH: 0
+    GIT_STRATEGY: clone
+    GIT_SUBMODULE_STRATEGY: none
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  before_script:
+    - apk add --no-cache git jq bash >/dev/null
+  script:
+    - |
+      set -eu
+
+      if [ ! -x scripts/backfill-attribution-log.sh ]; then
+        echo "scripts/backfill-attribution-log.sh is missing or not executable." >&2
+        exit 1
+      fi
+
+      # Git notes are not fetched by default and are the only source of file-level
+      # attribution. Absence is not fatal: the log is still rebuilt, just without
+      # ai_files/human_files, which is the pre-existing degraded behaviour.
+      git fetch origin "refs/notes/ai-attribution:refs/notes/ai-attribution" 2>/dev/null \
+        || echo "No refs/notes/ai-attribution on origin — entries will have notes: null."
+
+      BEFORE=0
+      [ -f metrics/attribution-log.jsonl ] && BEFORE=$(wc -l < metrics/attribution-log.jsonl | tr -d ' ')
+
+      bash scripts/backfill-attribution-log.sh
+
+      AFTER=$(wc -l < metrics/attribution-log.jsonl | tr -d ' ')
+      echo "attribution log: ${BEFORE} -> ${AFTER} entries"
+
+      if git diff --quiet -- metrics/attribution-log.jsonl; then
+        echo "No attribution changes to commit."
+        exit 0
+      fi
+
+      if [ -z "${ATTRIBUTION_PUSH_TOKEN:-}" ]; then
+        echo "ATTRIBUTION_PUSH_TOKEN is not set, so the update cannot be pushed." >&2
+        echo "Diff that would have been committed:" >&2
+        git --no-pager diff --stat -- metrics/attribution-log.jsonl >&2
+        exit 0
+      fi
+
+      git config user.name "gitlab-ci[bot]"
+      git config user.email "gitlab-ci-bot@${CI_SERVER_HOST}"
+      git add metrics/attribution-log.jsonl
+
+      # printf, not a YAML multi-line string: the commit body needs `[skip ci]` and any
+      # future trailers to sit at column 0, and column-0 content inside a block scalar
+      # terminates it — turning the rest into stray top-level keys and making GitLab
+      # reject the file outright.
+      COMMIT_MSG=$(printf 'chore(metrics): update attribution log (%s entries)\n\n[skip ci]\n' "$AFTER")
+      git commit -m "$COMMIT_MSG"
+
+      # Supply the token via a credential helper so it never appears in a URL, a remote
+      # config, or an error message. Scoped to this one invocation with -c, so nothing
+      # is written to the runner's git config.
+      # The runner checks out a detached HEAD, so name the target ref explicitly.
+      # A rejected push means another commit landed mid-pipeline; the next run
+      # regenerates from scratch and picks it up, so this is not worth failing over.
+      git -c credential.helper= \
+          -c 'credential.helper=!f() { echo "username=oauth2"; echo "password=${ATTRIBUTION_PUSH_TOKEN}"; }; f' \
+        push --push-option=ci.skip \
+        "https://${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" \
+        "HEAD:refs/heads/${CI_DEFAULT_BRANCH}" \
+        || echo "Push rejected — origin moved during the pipeline. Next run will catch up."

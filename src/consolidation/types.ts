@@ -34,7 +34,8 @@ export interface MetricsResult {
   }>;
   byAuthor: Array<{
     author: string;
-    email: string;
+    /** Only when the log records emails (--with-email). */
+    email?: string;
     totalCommits: number;
     aiInvolvedCommits: number;
     aiLines: number;

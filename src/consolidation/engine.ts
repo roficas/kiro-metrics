@@ -32,15 +32,17 @@ export function weeksBetween(since: string, until: string): number {
 /** Main consolidation function. */
 /**
  * A commit is a bot commit if its author name carries the conventional `[bot]` suffix,
- * or its email matches a known CI identity. Matching on the name alone would miss
- * runners configured with a plain name; matching on email alone would miss forge
- * defaults. Deliberately narrow: a false positive silently drops real work.
+ * or its name or email matches a known CI identity. Matching on the name alone would
+ * miss runners configured with a plain name; matching on email alone would miss forge
+ * defaults — and the log omits email by default, so the name must be enough on its own.
+ * Deliberately narrow: a false positive silently drops real work.
  */
+const CI_IDENTITY = /^(github-actions|gitlab-ci|gitlab-ci-bot|dependabot|renovate)([-@[]|$)/i;
+
 export function isBotCommit(commit: CommitData): boolean {
   if (/\[bot\]/i.test(commit.author)) return true;
-  return /^(github-actions|gitlab-ci|gitlab-ci-bot|dependabot|renovate)[-@]/i.test(
-    commit.authorEmail
-  );
+  if (CI_IDENTITY.test(commit.author)) return true;
+  return commit.authorEmail !== undefined && CI_IDENTITY.test(commit.authorEmail);
 }
 
 /** A commit whose attribution could not be measured, as opposed to being human-authored. */
@@ -204,7 +206,7 @@ function computeByAuthor(
   const authorMap = new Map<
     string,
     {
-      email: string;
+      email?: string;
       totalCommits: number;
       aiInvolvedCommits: number;
       aiLines: number;
