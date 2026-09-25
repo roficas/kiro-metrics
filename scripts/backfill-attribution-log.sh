@@ -85,10 +85,14 @@ while read -r SHA; do
   [ -n "$SHA" ] || continue
   TOTAL=$((TOTAL + 1))
 
-  AUTHOR=$(git log -1 --format='%an' "$SHA")
+  # %aN/%aE (capitalized), not %an/%ae: the capitalized forms are mailmap-aware, so a
+  # repo's .mailmap collapses split identities (e.g. two emails for one person) into one
+  # canonical name here. The lowercase forms ignore .mailmap entirely and would silently
+  # keep reporting the same person as separate contributors.
+  AUTHOR=$(git log -1 --format='%aN' "$SHA")
   EMAIL=""
   if [ "$WITH_EMAIL" = true ]; then
-    EMAIL=$(git log -1 --format='%ae' "$SHA")
+    EMAIL=$(git log -1 --format='%aE' "$SHA")
   fi
   DATE=$(git log -1 --format='%aI' "$SHA")
   MESSAGE=$(git log -1 --format='%s' "$SHA")

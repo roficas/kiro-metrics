@@ -13,8 +13,8 @@
 
 ADR-001 captures attribution at edit time. It works when the Kiro workspace and the git
 repository share a root. They do not when a workspace spans more than one repository, and
-this project spans two: the workspace root `devs-with-genai/`, and the submodule
-`kiro-metrics-demo/` tracking `roficas/kiro-metrics`.
+the original setup spanned two: a parent project at the workspace root, and this tool
+checked out inside it as the submodule `kiro-metrics-demo/`.
 
 `pre-commit` matches staged files against the tracking log with an **exact string
 comparison** against `git diff --cached --name-only`, which is repo-root-relative. Two
@@ -27,7 +27,7 @@ Deriving a single root from the hook's working directory satisfied neither.
 the superproject. So an edit to the submodule's README was written as:
 
 ```
-devs-with-genai/.kiro-attribution.json
+parent-project/.kiro-attribution.json
   → { "file": "kiro-metrics-demo/README.md" }
 ```
 

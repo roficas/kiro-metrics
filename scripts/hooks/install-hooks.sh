@@ -50,9 +50,9 @@ HOOKS_PATH="$(git config core.hooksPath || true)"
 if [ -n "$HOOKS_PATH" ]; then
   echo
   echo "NOTE: core.hooksPath is set to '$HOOKS_PATH'."
-  echo "git runs hooks from there, not from .git/hooks. Many corporate wrappers"
-  echo "(git-defender, for example) run their own checks and then chain to the repo-local"
-  echo "hooks, in which case these symlinks DO fire and this note is a false positive."
+  echo "git runs hooks from there, not from .git/hooks. Many corporate security wrappers"
+  echo "run their own checks and then chain to the repo-local hooks, in which case these"
+  echo "symlinks DO fire and this note is a false positive."
   echo "Confirm either way by making a real commit and checking for trailers:"
   echo "  git log -1 --format='%B' | grep '^ai-'"
   echo "If the wrapper does not chain, the symptom is every commit reading"

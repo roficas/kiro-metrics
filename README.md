@@ -43,24 +43,24 @@ The last two rows are the important ones for trust: **bot commits and unverifiab
 
 ### Make your project trackable (write side)
 
-You need 6 files and one command. Nothing else changes in your project.
+Copy one Kiro hook file and the `scripts/hooks/` folder, then run one command. Nothing else
+changes in your project. Run these from your clone of this repository:
 
 ```bash
-# 1. Copy the Kiro agent hooks (capture probe + edit logger)
-mkdir -p .kiro/hooks
-cp kiro-metrics-demo/.kiro/hooks/track-ai-edits.json  your-project/.kiro/hooks/
+TARGET=/path/to/your-project
 
-# 2. Copy the hook scripts
-mkdir -p your-project/scripts/hooks
-cp scripts/hooks/log-ai-edit.sh        your-project/scripts/hooks/
-cp scripts/hooks/mark-session-start.sh your-project/scripts/hooks/
-cp scripts/hooks/pre-commit            your-project/scripts/hooks/
-cp scripts/hooks/prepare-commit-msg    your-project/scripts/hooks/
-cp scripts/hooks/post-commit           your-project/scripts/hooks/
-chmod +x your-project/scripts/hooks/*
+# 1. Copy the Kiro agent hooks (capture probe + edit logger)
+mkdir -p "$TARGET/.kiro/hooks"
+cp .kiro/hooks/track-ai-edits.json "$TARGET/.kiro/hooks/"
+
+# 2. Copy the hook scripts (includes install-hooks.sh and lib-generated.sh,
+#    which pre-commit sources to exclude lockfiles and build output)
+mkdir -p "$TARGET/scripts/hooks"
+cp scripts/hooks/* "$TARGET/scripts/hooks/"
+chmod +x "$TARGET/scripts/hooks/"*
 
 # 3. Install the git hooks (symlinks them into .git/hooks/)
-cd your-project
+cd "$TARGET"
 ./scripts/hooks/install-hooks.sh
 
 # 4. Add tracking files to .gitignore — do this BEFORE your first commit
@@ -69,6 +69,12 @@ echo ".kiro-attribution-staged.json" >> .gitignore
 ```
 
 That's it. Start a new Kiro session and every commit will be automatically tagged.
+
+> **What runs automatically.** Once `.kiro/hooks/track-ai-edits.json` is in a workspace
+> Kiro trusts, Kiro runs `scripts/hooks/mark-session-start.sh` when a session starts and
+> `scripts/hooks/log-ai-edit.sh` after each agent file edit. The git hooks run on every
+> commit. All of them only read git state and write the two local tracking files below;
+> none make network calls. Read them before installing, as you would any hook.
 
 > **Never commit the tracking files.** Both are ephemeral scratch state:
 > `.kiro-attribution.json` is appended to by the Kiro hook and reset to `{"edits":[]}` by
@@ -140,11 +146,11 @@ npx tsx src/index.ts --repo /path/to/your-project --format html > attribution-re
 
 # Remote — point at the raw URL of the committed log (any host)
 npx tsx src/index.ts --repo https://raw.githubusercontent.com/owner/repo/main/metrics/attribution-log.jsonl
-npx tsx src/index.ts --repo https://gitlab.aws.dev/group/proj/-/raw/main/metrics/attribution-log.jsonl
+npx tsx src/index.ts --repo https://gitlab.example.com/group/proj/-/raw/main/metrics/attribution-log.jsonl
 
 # Private repo? Export a token (host-agnostic, sent as a Bearer header — https only)
 export METRICS_TOKEN=<token>
-npx tsx src/index.ts --repo https://gitlab.aws.dev/group/proj/-/raw/main/metrics/attribution-log.jsonl
+npx tsx src/index.ts --repo https://gitlab.example.com/group/proj/-/raw/main/metrics/attribution-log.jsonl
 ```
 
 Give `METRICS_TOKEN` read-only scope (`read_repository` on GitLab, `contents: read` on
@@ -420,7 +426,7 @@ Both templates call the shared script and emit the identical contract.
 **GitHub** — copy `.github/workflows/attribution-log.yml`. GitHub does not retrigger a
 workflow from a push made with the default token, so no loop guard is needed.
 
-**GitLab (incl. gitlab.aws.dev)** — copy `.gitlab-ci.yml`. It needs an `ATTRIBUTION_PUSH_TOKEN`
+**GitLab (gitlab.com or self-hosted)** — copy `.gitlab-ci.yml`. It needs an `ATTRIBUTION_PUSH_TOKEN`
 CI/CD variable because `CI_JOB_TOKEN` cannot push to its own repo. Create it with the least
 access that works and treat it as a secret:
 
@@ -442,7 +448,7 @@ git push origin refs/notes/ai-attribution
 
 `--repo` accepts:
 - a **local path** — a repo directory (looks for `metrics/attribution-log.jsonl` inside it) or a direct path to the file
-- a **raw URL** — the file served by any host (GitHub raw, GitLab raw, gitlab.aws.dev raw)
+- a **raw URL** — the file served by any host (GitHub raw, GitLab raw, self-hosted GitLab raw)
 
 For a private repo, export `METRICS_TOKEN` and it's sent as a `Bearer` header over `https://` only.
 

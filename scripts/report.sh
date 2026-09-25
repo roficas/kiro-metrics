@@ -41,20 +41,19 @@ if [ "$VIEW" = "developer" ] && [ $# -gt 0 ] && [[ "$1" != -* ]]; then
 fi
 
 # Resolve the CLI. Order matters: an installed binary wins, then a local node_modules
-# bin, then the TypeScript sources in a sibling checkout or submodule. Without this the
-# script would only work from inside the tool's own repository.
+# bin, then the TypeScript sources when run from a clone of this repository.
 if command -v kiro-metrics >/dev/null 2>&1; then
   RUN=(kiro-metrics)
 elif [ -x "${REPO_ROOT}/node_modules/.bin/kiro-metrics" ]; then
   RUN=("${REPO_ROOT}/node_modules/.bin/kiro-metrics")
 elif [ -f "${REPO_ROOT}/src/index.ts" ]; then
   RUN=(npx --prefix "$REPO_ROOT" tsx "${REPO_ROOT}/src/index.ts")
-elif [ -f "${REPO_ROOT}/kiro-metrics-demo/src/index.ts" ]; then
-  RUN=(npx --prefix "${REPO_ROOT}/kiro-metrics-demo" tsx "${REPO_ROOT}/kiro-metrics-demo/src/index.ts")
 else
+  # Point only at the git URL. The tool is not published to npm, and suggesting an
+  # unclaimed registry name invites someone else to claim it and ship code to readers.
   echo "Cannot find the kiro-metrics CLI." >&2
-  echo "  Install it (npm install -g @roficas/kiro-metrics), or run this from a" >&2
-  echo "  checkout that has src/index.ts or kiro-metrics-demo/src/index.ts." >&2
+  echo "  Install it: npm install -g github:roficas/kiro-metrics" >&2
+  echo "  or run this script from a clone of https://github.com/roficas/kiro-metrics." >&2
   exit 1
 fi
 
