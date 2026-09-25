@@ -1,0 +1,1 @@
+{"attribution_state":"measured","ai_lines":44,"human_lines":6,"total_lines":50,"excluded_lines":0,"ai_files":["README.md","SECURITY.md","scripts/backfill-attribution-log.sh","scripts/report.sh"],"human_files":["docs/decisions/002-submodule-path-prefix.md","scripts/hooks/install-hooks.sh"],"excluded_files":[]}
