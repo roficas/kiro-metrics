@@ -1,0 +1,1 @@
+{"attribution_state":"measured","ai_lines":17,"human_lines":3,"total_lines":20,"excluded_lines":147,"ai_files":[".github/workflows/attribution-log.yml"],"human_files":[".gitlab-ci.yml","package.json"],"excluded_files":["package-lock.json"]}
