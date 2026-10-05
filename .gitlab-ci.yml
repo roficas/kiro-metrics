@@ -54,7 +54,7 @@ workflow:
 
 update-attribution-log:
   stage: metrics
-  image: alpine:3.20
+  image: alpine:3.24
   # The backfill walks every commit, so a shallow clone would silently truncate the
   # log to whatever depth the runner defaulted to. 0 means full history.
   variables:

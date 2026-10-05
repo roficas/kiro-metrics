@@ -31,12 +31,23 @@ on:
   push:
     branches: [main]
 
-permissions:
-  contents: write
+# No permissions by default. Each job grants only what it needs, so a job added later
+# starts with no access instead of inheriting write.
+permissions: {}
+
+# Two quick pushes would otherwise start two jobs that race to push the log, and the
+# loser fails. Queue them instead: each run rebuilds from full history, so the later
+# one always produces the complete log.
+concurrency:
+  group: attribution-log-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   update-attribution-log:
+    name: Update attribution log
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # commit and push metrics/attribution-log.jsonl back to main
     steps:
       - name: Checkout with full history
         # Pinned to a commit rather than a mutable tag: this job holds contents: write, so a
@@ -45,6 +56,10 @@ jobs:
         with:
           # The rebuild walks every commit; a shallow clone would silently truncate the log.
           fetch-depth: 0
+          # Credentials stay in .git/config on purpose: the last step pushes with them.
+          # The persisted-credential risk zizmor flags is leaking them via an uploaded
+          # artifact, and this workflow uploads none. Keep it that way.
+          persist-credentials: true # zizmor: ignore[artipacked]
 
       - name: Fetch attribution notes
         run: |
